@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import pytest
 
 import Keprename5video as m
-from conftest import make_jpg, pump
+from conftest import accept_dialog, make_jpg, pump
 
 
 @pytest.mark.parametrize("text, expected", [
@@ -32,23 +32,11 @@ def test_move_target_folder_uses_earliest_day():
     assert m.move_target_folder("/base", items, "Bala/ton") == os.path.join("/base", "2024-05-01_Bala-ton")
 
 
-def _find_toplevel(app):
-    tops = [w for w in app.winfo_children() if isinstance(w, tk.Toplevel)]
-    return tops[-1] if tops else None
-
-
-def _drive_preview(app, shift_text):
-    """Megvárja az előnézet ablakot, beírja az eltolást, és Enterrel elfogadja."""
-    def step():
-        win = _find_toplevel(app)
-        if win is None:
-            app.after(50, step)
-            return
+def _set_shift(text):
+    def prepare(win):
         entry = next(w for w in m.ImageRenamerGUI._walk(win) if isinstance(w, tk.ttk.Entry))
-        entry.insert(0, shift_text)
-        app.after(500, lambda: win.event_generate("<Return>"))  # az előnézet 300 ms után frissül
-
-    app.after(50, step)
+        entry.insert(0, text)
+    return prepare
 
 
 def test_rename_with_preview_and_shift(app, tmp_path, monkeypatch):
@@ -61,7 +49,7 @@ def test_rename_with_preview_and_shift(app, tmp_path, monkeypatch):
     app.mark_all()
     monkeypatch.setattr(app, "get_suffix", lambda: ("Nyaralás", True))
     monkeypatch.setattr(m.messagebox, "showinfo", lambda *a, **k: None)
-    _drive_preview(app, "+1")
+    accept_dialog(app, _set_shift("+1"))
     app.rename_selected()
     pump(app, 1.5)
     target = folder / "2023-07-15_Nyaralás"
