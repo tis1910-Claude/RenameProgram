@@ -1,0 +1,7 @@
+# Kötelező
+Pillow>=9.1
+
+# Opcionális (a program nélkülük is fut, csak az adott funkció hiányzik)
+send2trash>=1.8      # törlés lomtárba végleges törlés helyett
+tkinterdnd2>=0.3     # mappa behúzása az ablakba (fogd és vidd)
+python-vlc>=3.0      # beépített videólejátszó (a VLC programnak is telepítve kell lennie)
