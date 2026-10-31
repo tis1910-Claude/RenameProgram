@@ -26,7 +26,7 @@ jobs:
           $data = @()
           foreach ($png in Get-ChildItem -Filter *.png) { $data += @("--add-data", "$($png.Name);.") }
           pyinstaller --noconfirm --noconsole --onefile --name MediaRenamerPro `
-            @data --collect-data sv_ttk --collect-all tkinterdnd2 `
+            @data --collect-data sv_ttk --collect-all tkinterdnd2 --collect-all pillow_heif --collect-all rawpy `
             --hidden-import PIL._tkinter_finder Keprename5video.py
       - uses: actions/upload-artifact@v4
         with:

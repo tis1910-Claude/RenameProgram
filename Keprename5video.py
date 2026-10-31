@@ -6,7 +6,8 @@ opcionálisan közös (dátum_téma) mappába mozgatva, vagy napok szerint
 
 Kötelező függőség: Pillow.
 Opcionális: tkinterdnd2 (fogd és vidd), python-vlc + VLC (beépített lejátszó),
-send2trash (törlés lomtárba), sv-ttk (Sun Valley megjelenés),
+send2trash (törlés lomtárba), sv-ttk (Sun Valley megjelenés), pillow-heif (iPhone HEIC fotók),
+exifread és rawpy (RAW fotók dátuma és bélyegképe),
 ffmpeg/ffprobe a PATH-on (videó dátum, bélyegkép).
 """
 import os
@@ -21,7 +22,7 @@ import threading
 import subprocess
 import configparser
 import io
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import partial
 
 import tkinter as tk
@@ -51,9 +52,31 @@ try:
 except Exception:
     sv_ttk = None
 
+try:
+    from pillow_heif import register_heif_opener
+    register_heif_opener()  # ettől kezdve a PIL.Image.open a HEIC/HEIF fájlokat is megnyitja
+    HAS_HEIF = True
+except Exception:
+    HAS_HEIF = False
+
+try:
+    import exifread
+except Exception:
+    exifread = None
+
+try:
+    import rawpy
+except Exception:
+    rawpy = None
+
 APP_NAME = "Media Renamer Pro 4.3"
-IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp")
+HEIF_EXTS = (".heic", ".heif")
+# RAW-fájlok: a dátumot az exifread, a bélyegképet a rawpy (vagy a beágyazott kis előnézet) adja
+RAW_EXTS = (".dng", ".cr2", ".cr3", ".nef", ".nrw", ".arw", ".orf", ".rw2", ".raf", ".pef", ".srw")
+IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp") + (HEIF_EXTS if HAS_HEIF else ()) + RAW_EXTS
 VIDEO_EXTS = (".mp4", ".mov", ".avi", ".mkv", ".m4v", ".3gp", ".mts")
+# ISO BMFF (MP4/QuickTime) konténerek: ezek dátumát ffprobe nélkül, Pythonban is ki tudjuk olvasni
+BMFF_EXTS = (".mp4", ".mov", ".m4v", ".3gp")
 MEDIA_EXTS = IMAGE_EXTS + VIDEO_EXTS
 DEFAULT_PATTERN = "{date}_{suffix}_{counter}"
 THUMB_SIZE = (150, 150)
@@ -73,6 +96,10 @@ def resource_path(relative_path):
 
 def is_video(path):
     return path.lower().endswith(VIDEO_EXTS)
+
+
+def is_raw(path):
+    return path.lower().endswith(RAW_EXTS)
 
 
 def is_media(path):
@@ -331,8 +358,33 @@ def _parse_exif_datetime(value):
         return None
 
 
+_EXIFREAD_TAGS = ("EXIF DateTimeOriginal", "EXIF DateTimeDigitized", "Image DateTime")
+
+
+def get_raw_datetime(path):
+    """RAW fájl dátuma az exifread csomaggal (a Pillow a legtöbb RAW-ot nem tudja megnyitni)."""
+    if exifread is None:
+        return None
+    try:
+        with open(path, "rb") as f:
+            tags = exifread.process_file(f, details=False)
+    except Exception as e:
+        print(f"RAW EXIF hiba ({path}): {e}")
+        return None
+    for name in _EXIFREAD_TAGS:
+        dt = _parse_exif_datetime(tags.get(name))
+        if dt:
+            return dt
+    return None
+
+
 def get_exif_datetime(path):
-    """DateTimeOriginal > DateTimeDigitized > DateTime. PNG/TIFF/WebP is jó."""
+    """DateTimeOriginal > DateTimeDigitized > DateTime. PNG/TIFF/WebP/HEIC és RAW is jó."""
+    if is_raw(path):
+        dt = get_raw_datetime(path)
+        if dt:
+            return dt
+        # exifread nélkül vagy ha az nem boldogult vele: a DNG és néhány régebbi RAW TIFF-ként is nyílik
     try:
         with Image.open(path) as img:
             exif = img.getexif()
@@ -346,7 +398,8 @@ def get_exif_datetime(path):
                 if dt:
                     return dt
     except Exception as e:
-        print(f"EXIF hiba ({path}): {e}")
+        if not is_raw(path):
+            print(f"EXIF hiba ({path}): {e}")
     return None
 
 
@@ -411,7 +464,139 @@ def probe_video(path):
     return {"duration": duration, "tags": tags}
 
 
+# --- MP4/MOV fejléc olvasása ffprobe nélkül (ISO BMFF dobozok) ---------------
+_QT_EPOCH = datetime(1904, 1, 1, tzinfo=timezone.utc)
+_MAX_MOOV = 64 * 1024 * 1024  # ennél nagyobb moov doboz gyanús, nem olvassuk be
+
+
+def _iter_boxes(data, start=0, end=None):
+    """(típus, tartalom kezdete, tartalom vége) a data[start:end] dobozaira."""
+    end = len(data) if end is None else end
+    pos = start
+    while pos + 8 <= end:
+        size = int.from_bytes(data[pos:pos + 4], "big")
+        kind = data[pos + 4:pos + 8]
+        header = 8
+        if size == 1:
+            if pos + 16 > end:
+                return
+            size, header = int.from_bytes(data[pos + 8:pos + 16], "big"), 16
+        elif size == 0:
+            size = end - pos
+        if size < header or pos + size > end:
+            return
+        yield kind, pos + header, pos + size
+        pos += size
+
+
+def _read_moov(path):
+    """A fájl legfelső szintű moov dobozának tartalma (a videóadatot átugorja), vagy None."""
+    with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        file_size = f.tell()
+        pos = 0
+        while pos + 8 <= file_size:
+            f.seek(pos)
+            header = f.read(16)
+            size, kind = int.from_bytes(header[:4], "big"), header[4:8]
+            hlen = 8
+            if size == 1:
+                size, hlen = int.from_bytes(header[8:16], "big"), 16
+            elif size == 0:
+                size = file_size - pos
+            if size < hlen:
+                return None
+            if kind == b"moov":
+                if size > _MAX_MOOV:
+                    return None
+                f.seek(pos + hlen)
+                return f.read(size - hlen)
+            pos += size
+    return None
+
+
+def _apple_creationdate(moov):
+    """moov/meta (vagy moov/udta/meta) keys+ilst: com.apple.quicktime.creationdate
+    (helyi idő + eltolás), vagy None."""
+    metas = []
+    for kind, start, end in _iter_boxes(moov):
+        if kind == b"meta":
+            metas.append((start, end))
+        elif kind == b"udta":
+            metas += [(s, e) for k, s, e in _iter_boxes(moov, start, end) if k == b"meta"]
+    for start, end in metas:
+        # A QuickTime meta doboz nem "full box"; az MP4-es igen (4 bájt verzió/jelzők)
+        if moov[start + 4:start + 8] != b"hdlr":
+            start += 4
+        keys, ilst = [], None
+        for sub, s, e in _iter_boxes(moov, start, end):
+            if sub == b"keys":
+                count = int.from_bytes(moov[s + 4:s + 8], "big")
+                p = s + 8
+                for _ in range(count):
+                    ksize = int.from_bytes(moov[p:p + 4], "big")
+                    if ksize < 8:
+                        break
+                    keys.append(moov[p + 8:p + ksize].decode("utf-8", "replace"))
+                    p += ksize
+            elif sub == b"ilst":
+                ilst = (s, e)
+        if not ilst:
+            continue
+        for item, s, e in _iter_boxes(moov, *ilst):
+            index = int.from_bytes(item, "big")
+            if not 1 <= index <= len(keys) or keys[index - 1] != "com.apple.quicktime.creationdate":
+                continue
+            for sub, ds, de in _iter_boxes(moov, s, e):
+                if sub == b"data":
+                    return moov[ds + 8:de].decode("utf-8", "replace").strip("\x00 ")
+    return None
+
+
+def read_bmff_metadata(path):
+    """MP4/MOV/3GP fejléc: {'creation_time': ISO szöveg (UTC) | None,
+    'apple_date': ISO szöveg eltolással | None, 'duration': mp | None}. Hiba esetén üres dict."""
+    try:
+        moov = _read_moov(path)
+    except OSError:
+        return {}
+    if not moov:
+        return {}
+    result = {"creation_time": None, "apple_date": None, "duration": None}
+    for kind, start, end in _iter_boxes(moov):
+        if kind == b"mvhd" and end - start >= 32:
+            version = moov[start]
+            if version == 1:
+                created = int.from_bytes(moov[start + 4:start + 12], "big")
+                timescale = int.from_bytes(moov[start + 20:start + 24], "big")
+                duration = int.from_bytes(moov[start + 24:start + 32], "big")
+            else:
+                created = int.from_bytes(moov[start + 4:start + 8], "big")
+                timescale = int.from_bytes(moov[start + 12:start + 16], "big")
+                duration = int.from_bytes(moov[start + 16:start + 20], "big")
+            if created:
+                try:
+                    dt = _QT_EPOCH + timedelta(seconds=created)
+                    result["creation_time"] = dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+                except OverflowError:
+                    pass
+            if timescale:
+                result["duration"] = duration / timescale
+    try:
+        result["apple_date"] = _apple_creationdate(moov)
+    except (IndexError, ValueError):
+        pass
+    return result
+
+
 def get_video_datetime(path):
+    if path.lower().endswith(BMFF_EXTS):
+        # Gyors út, ffprobe nélkül is működik (Windowson ritkán van ffmpeg telepítve)
+        meta = read_bmff_metadata(path)
+        for value in (meta.get("apple_date"), meta.get("creation_time")):
+            dt = parse_iso_datetime(value)
+            if dt:
+                return dt
     tags = probe_video(path).get("tags", {})
     # Az iPhone helyi időt + eltolást ír ide, ez megbízhatóbb a UTC creation_time-nál
     for key in ("com.apple.quicktime.creationdate", "creation_time", "date"):
@@ -652,7 +837,42 @@ class ThumbnailGenerator:
             return Image.new('RGB', size, color='gray')
 
     @staticmethod
+    def _raw_preview(path):
+        """A RAW fájlba ágyazott JPEG előnézet (rawpy), vagy az EXIF kis bélyegképe (exifread)."""
+        if rawpy is not None:
+            try:
+                with rawpy.imread(path) as raw:
+                    thumb, flip = raw.extract_thumb(), raw.sizes.flip
+                if thumb.format == rawpy.ThumbFormat.JPEG:
+                    img = Image.open(io.BytesIO(thumb.data))
+                else:
+                    img = Image.fromarray(thumb.data)
+                # Az előnézetben gyakran nincs tájolás; ilyenkor a RAW saját forgatása (LibRaw flip) érvényes
+                transpose = {3: Image.Transpose.ROTATE_180, 5: Image.Transpose.ROTATE_90,
+                             6: Image.Transpose.ROTATE_270}.get(flip)
+                if transpose is not None and not img.getexif().get(0x0112):
+                    img = img.transpose(transpose)
+                return img
+            except Exception as e:
+                print(f"rawpy hiba ({path}): {e}")
+        if exifread is not None:
+            try:
+                with open(path, "rb") as f:
+                    data = exifread.process_file(f, details=True).get("JPEGThumbnail")
+                if data:
+                    return Image.open(io.BytesIO(data))
+            except Exception as e:
+                print(f"RAW előnézet hiba ({path}): {e}")
+        return None
+
+    @staticmethod
     def _image(path, size):
+        if is_raw(path):
+            img = ThumbnailGenerator._raw_preview(path)
+            if img is not None:
+                img = ImageOps.exif_transpose(img)
+                img.thumbnail(size)
+                return img.convert("RGB")
         with Image.open(path) as img:
             img.draft("RGB", (size[0] * 2, size[1] * 2))  # gyors JPEG-dekódolás
             img = ImageOps.exif_transpose(img)  # álló fotók helyes forgatása
@@ -684,7 +904,11 @@ class ThumbnailGenerator:
     def _video(path, size):
         if not shutil.which("ffmpeg"):
             return Image.new('RGB', size, color='gray')
-        duration = probe_video(path).get("duration")
+        duration = None
+        if path.lower().endswith(BMFF_EXTS):
+            duration = read_bmff_metadata(path).get("duration")
+        if duration is None:
+            duration = probe_video(path).get("duration")
         # 5 mp-nél rövidebb videónál a régi fix 5 mp-es pozíció üres képet adott
         pos = min(5.0, duration * 0.1) if duration else 0.0
         out = ThumbnailGenerator._grab_frame(path, pos)
