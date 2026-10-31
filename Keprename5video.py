@@ -24,7 +24,7 @@ from functools import partial
 
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
-from PIL import Image, ImageTk, ImageOps
+from PIL import Image, ImageTk, ImageOps, ImageDraw
 
 try:
     from tkinterdnd2 import TkinterDnD, DND_FILES
@@ -692,6 +692,21 @@ class SettingsManager:
         self.config['Naming']['recent_suffixes'] = json.dumps(values[:15], ensure_ascii=False)
 
 
+def fallback_icon(name, size=(32, 32)):
+    """Hiányzó ikonfájl helyett: frissítéshez rajzolt környíl, egyébként átlátszó üres ikon."""
+    img = Image.new("RGBA", size, (0, 0, 0, 0))
+    if name.lower().startswith("refresh"):
+        w, h = size
+        pad, color, width = w // 6, (40, 120, 200, 255), max(2, w // 10)
+        draw = ImageDraw.Draw(img)
+        draw.arc((pad, pad, w - pad, h - pad), start=30, end=330, fill=color, width=width)
+        # Nyílhegy a körív felső végén (330°), az óramutató járásával megegyező irányba
+        tip_x, tip_y = w - pad, h // 2 - h // 6
+        draw.polygon([(tip_x - w // 5, tip_y - h // 10), (tip_x + w // 10, tip_y - h // 10),
+                      (tip_x - w // 20, tip_y + h // 5)], fill=color)
+    return img
+
+
 class ImageRenamerGUI(_BaseTk):
     def __init__(self):
         super().__init__()
@@ -733,10 +748,10 @@ class ImageRenamerGUI(_BaseTk):
         self.bind_all("<Control-z>", lambda e: self.undo_last())
 
         self.exit_button = tk.Button(self.btn_frame, text=self.t("btn_exit"), image=self.icons["exit"],
-                                     compound="left", command=self.on_close)
+                                     compound="left", padx=4, command=self.on_close)
         self.exit_button.pack(side=tk.RIGHT, padx=2)
         self.delete_button = tk.Button(self.btn_frame, text=self.t("btn_delete"), image=self.icons["delete"],
-                                       compound="left", command=self.delete_selected)
+                                       compound="left", padx=4, command=self.delete_selected)
         self.delete_button.pack(side=tk.RIGHT, padx=2)
         # A jobb oldali gombok kerülnek be először, így keskeny ablakban sem tűnik el a Törlés
         self.action_buttons = [self.delete_button]
@@ -748,7 +763,7 @@ class ImageRenamerGUI(_BaseTk):
             ("btn_unmark", self.unmark_all, "unmark"),
         ]:
             btn = tk.Button(self.btn_frame, text=self.t(text), image=self.icons[icon_key],
-                            compound="left", command=cmd)
+                            compound="left", padx=4, command=cmd)
             btn.pack(side=tk.LEFT, padx=2)
             self.action_buttons.append(btn)
 
@@ -831,7 +846,7 @@ class ImageRenamerGUI(_BaseTk):
             return tk.PhotoImage(file=resource_path(path))
         except Exception as e:
             print(f"Ikonhiba ({path}): {e}")
-            return ImageTk.PhotoImage(Image.new('RGB', default_size, color='gray'))
+            return ImageTk.PhotoImage(fallback_icon(path, default_size))
 
     def setup_menu(self):
         menu = tk.Menu(self)

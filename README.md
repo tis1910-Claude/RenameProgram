@@ -28,8 +28,10 @@ Példa: `IMG_1234.jpg` → `2024-05-01_14-30-00_Balaton.jpg`
 3. Videókhoz: [ffmpeg](https://ffmpeg.org/download.html) (`ffmpeg` és `ffprobe` legyen a PATH-on).
 4. Beépített lejátszóhoz: [VLC](https://www.videolan.org/vlc/) (a `python-vlc` bitszáma egyezzen a VLC-ével).
 
-Az ikonok (`folder.png`, `rename.png`, `refresh.png`, `unmark.png`, `MarkAll.png`, `delete.png`, `exit.png`, `media.png`)
-a program mellé kerülnek; ha hiányoznak, szürke helyettesítő ikon jelenik meg.
+Az ikonok (`folder.png`, `rename.png`, `unmark.png`, `MarkAll.png`, `delete.png`, `exit.png`, `media.png`)
+a program mellett vannak. A `refresh.png` nincs a repóban: helyette a program egy kék környilat rajzol,
+de ha a mappába teszel egy `refresh.png`-t, azt használja. Bármelyik hiányzó ikon helyén üres hely marad,
+a program attól még működik.
 
 ## Futtatás
 
