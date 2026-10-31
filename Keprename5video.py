@@ -163,7 +163,15 @@ TEXTS = {
         "busy_exit": "Egy művelet még fut. Ha most kilépsz, félbeszakad. Biztosan kilépsz?",
         "suffix_title": "Téma választása",
         "suffix_prompt": "Mi legyen a képek/videók neve?:",
-        "move_check": "File-ok másik könyvtárba mozgatása",
+        "move_check": "Új mappa létrehozása (dátum + téma), és a fájlok áthelyezése oda",
+        "move_folder": "A fájlok ide kerülnek: {path}",
+        "move_base_label": "Az új mappa helye:",
+        "move_base_current": "a jelenlegi mappa",
+        "move_base_browse": "Tallózás...",
+        "move_base_reset": "Jelenlegi mappa",
+        "move_base_title": "Hová kerüljön az új mappa?",
+        "move_date_placeholder": "ÉÉÉÉ-HH-NN",
+        "move_topic_placeholder": "téma",
         "ok": "OK (Enter)",
         "cancel": "Mégse (Esc)",
         "reading_dates": "Dátumok olvasása... {i}/{n}",
@@ -290,7 +298,15 @@ TEXTS = {
         "busy_exit": "An operation is still running and will be interrupted. Exit anyway?",
         "suffix_title": "Choose topic",
         "suffix_prompt": "What should the pictures/videos be called?:",
-        "move_check": "Move files to a separate folder",
+        "move_check": "Create a new folder (date + topic) and move the files there",
+        "move_folder": "Files will go to: {path}",
+        "move_base_label": "New folder location:",
+        "move_base_current": "the current folder",
+        "move_base_browse": "Browse...",
+        "move_base_reset": "Current folder",
+        "move_base_title": "Where should the new folder go?",
+        "move_date_placeholder": "YYYY-MM-DD",
+        "move_topic_placeholder": "topic",
         "ok": "OK (Enter)",
         "cancel": "Cancel (Esc)",
         "reading_dates": "Reading dates... {i}/{n}",
@@ -1792,7 +1808,8 @@ class SettingsManager:
         legacy = os.path.abspath('settings.ini')
         self.config.read([legacy, self.config_file], encoding="utf-8")
         for section, defaults in (
-                ('UI', {'theme': DEFAULT_APPEARANCE, 'language': 'hu', 'recursive': 'yes', 'last_folder': ''}),
+                ('UI', {'theme': DEFAULT_APPEARANCE, 'language': 'hu', 'recursive': 'yes', 'last_folder': '',
+                        'move_base': ''}),
                 ('Naming', {'pattern': DEFAULT_PATTERN, 'recent_suffixes': '[]', 'place': 'no'})):
             if not self.config.has_section(section):
                 self.config.add_section(section)
@@ -1837,6 +1854,16 @@ class SettingsManager:
     def effective_pattern(self):
         """A sablon; ha a „Helyszín a névben” be van kapcsolva, a {place} mezővel kiegészítve."""
         return pattern_with_place(self.pattern) if self.place_enabled else self.pattern
+
+    @property
+    def move_base(self):
+        """Mozgatáskor az új mappa helye; üres, ha nincs megadva vagy nem elérhető (pl. kihúzott pendrive)."""
+        folder = self.config['UI']['move_base']
+        return folder if folder and os.path.isdir(folder) else ""
+
+    @move_base.setter
+    def move_base(self, folder):
+        self.config['UI']['move_base'] = folder
 
     @property
     def recent_suffixes(self):
@@ -1945,6 +1972,7 @@ class ImageRenamerGUI(_BaseTk):
         self.busy = False
         self.running = True
         self.folder = ""
+        self.moved_out = set()  # új mappába mozgatott fájlok: az almappákból se töltődjenek vissza a listába
 
         self.daysort_button = tk.Button(self.btn_frame, text=self.t("btn_daysort"), image=self.icons["folder"],
                                         compound="left", padx=4, command=self.sort_by_day)
@@ -2349,6 +2377,7 @@ class ImageRenamerGUI(_BaseTk):
 
     def _open_folder(self, folder):
         self.folder = os.path.normpath(folder)
+        self.moved_out.clear()
         self.settings.config['UI']['last_folder'] = self.folder
         self.settings.save_settings()
         self.load_media()
@@ -2372,6 +2401,7 @@ class ImageRenamerGUI(_BaseTk):
         self.run_in_background(work, self.update_gui)
 
     def update_gui(self, files):
+        files = [p for p in files if _key(p) not in self.moved_out]
         self.files = files
         recursive = self.recursive_var.get()
         labels = {p: os.path.relpath(p, self.folder) if recursive else os.path.basename(p) for p in files}
@@ -2560,6 +2590,7 @@ class ImageRenamerGUI(_BaseTk):
         if not suffix:
             return
         pattern, base_folder = self.settings.effective_pattern(), self.folder
+        move_root = self.settings.move_base or base_folder
         # Live Photo: a fotó és a videója együtt mozog, akkor is, ha csak az egyik van kijelölve
         selected, partners = with_live_partners(selected, self.files)
         followers = {v for vids in partners.values() for v in vids}
@@ -2576,7 +2607,13 @@ class ImageRenamerGUI(_BaseTk):
             return items
 
         self.run_in_background(work, lambda items: self.after(
-            0, self._rename_preview, items, suffix, move_files, pattern, base_folder, partners, places))
+            0, self._rename_preview, items, suffix, move_files, pattern, base_folder, partners, places, move_root))
+
+    def _center_pos(self, width, height):
+        """Wm geometry pozíció, amivel egy ekkora ablak a főablak közepére kerül."""
+        x = self.winfo_rootx() + (self.winfo_width() - width) // 2
+        y = self.winfo_rooty() + (self.winfo_height() - height) // 2
+        return f"+{x}+{y}"
 
     def _add_shift_row(self, win, on_change):
         """Időeltolás mező az előnézetekhez. Vissza: függvény, ami a timedelta-t adja (hibánál None)."""
@@ -2629,7 +2666,8 @@ class ImageRenamerGUI(_BaseTk):
         win.bind("<Escape>", lambda e: win.destroy())
         return ok_btn
 
-    def _rename_preview(self, items, suffix, move_files, pattern, base_folder, partners=None, places=None):
+    def _rename_preview(self, items, suffix, move_files, pattern, base_folder, partners=None, places=None,
+                        move_root=None):
         self.set_status(self.t("ready"))
         file_dated = {path for path, _, source in items if source == "file"}
         name_dated = {path for path, _, source in items if source == "filename"}
@@ -2638,7 +2676,7 @@ class ImageRenamerGUI(_BaseTk):
         win = tk.Toplevel(self)
         win.title(self.t("rename_preview_title"))
         win.transient(self)
-        win.geometry("860x520")
+        win.geometry("860x520" + self._center_pos(860, 520))
         summary = tk.Label(win, justify=tk.LEFT, anchor="w", wraplength=820)
         summary.pack(fill=tk.X, padx=10, pady=(10, 4))
         if file_dated:
@@ -2661,7 +2699,7 @@ class ImageRenamerGUI(_BaseTk):
                 ok_btn.state(["disabled"])
                 return
             shifted = [(p, dt + delta) for p, dt, _ in items]
-            target = move_target_folder(base_folder, shifted, suffix) if move_files else None
+            target = move_target_folder(move_root or base_folder, shifted, suffix) if move_files else None
             plan = plan_renames(shifted, suffix, pattern, target, partners=partners, places=places)
             dates = dict(shifted)
             for photo, videos in (partners or {}).items():
@@ -2676,7 +2714,9 @@ class ImageRenamerGUI(_BaseTk):
                 tree.insert("", tk.END, text=os.path.relpath(old, base_folder),
                             values=(dates[old].strftime("%Y-%m-%d %H:%M:%S") + mark,
                                     self.t("unchanged_mark") if same else
-                                    (os.path.relpath(new, base_folder) if target else os.path.basename(new))))
+                                    # A cél másik meghajtón is lehet, a betöltött mappához képest nincs relatív út
+                                    (os.path.relpath(new, os.path.dirname(target)) if target
+                                     else os.path.basename(new))))
             text = self.t("rename_preview_summary", n=len(plan) - unchanged, unchanged=unchanged)
             if target:
                 text += "\n" + self.t("moved_to", folder=target).strip()
@@ -2711,6 +2751,9 @@ class ImageRenamerGUI(_BaseTk):
         if r["done"]:
             self.history.push("rename", r["done"], [r["created"]] if r["created"] else [])
             self._refresh_undo_label()
+        if r["target"]:
+            self.moved_out.update(_key(new) for _, new in r["done"])
+        self.load_media()  # a lista már az üzenetablak mögött is a friss állapotot mutassa
         lines = [self.t("renamed", n=len(r["done"]))
                  + (self.t("moved_to", folder=r["target"]) if r["target"] else "")]
         if r["unchanged"]:
@@ -2722,7 +2765,6 @@ class ImageRenamerGUI(_BaseTk):
             messagebox.showerror(self.t("error"), "\n\n".join(lines))
         else:
             messagebox.showinfo(self.t("success"), "\n\n".join(lines))
-        self.load_media()
 
     def undo_last(self):
         if self.busy:
@@ -2802,7 +2844,7 @@ class ImageRenamerGUI(_BaseTk):
         win = tk.Toplevel(self)
         win.title(self.t("daysort_title"))
         win.transient(self)
-        win.geometry("760x480")
+        win.geometry("760x480" + self._center_pos(760, 480))
         summary = tk.Label(win, justify=tk.LEFT, anchor="w", wraplength=720)
         summary.pack(fill=tk.X, padx=10, pady=(10, 4))
         if file_dated:
@@ -2927,7 +2969,7 @@ class ImageRenamerGUI(_BaseTk):
         win = tk.Toplevel(self)
         win.title(self.t("dup_title"))
         win.transient(self)
-        win.geometry("820x480")
+        win.geometry("820x480" + self._center_pos(820, 480))
         tk.Label(win, text=self.t("dup_summary", g=len(groups), n=len(extra), mb=size / 1024 / 1024),
                  justify=tk.LEFT, anchor="w", wraplength=780).pack(fill=tk.X, padx=10, pady=(10, 4))
         tree = self._preview_tree(win, [("#0", self.t("dup_col_file"), 520), ("role", "", 200)])
@@ -2952,23 +2994,29 @@ class ImageRenamerGUI(_BaseTk):
         win.focus_set()
 
     def get_suffix(self):
-        """Téma választó ablak pipálható mozgatási opcióval"""
+        """Téma választó ablak pipálható mozgatási opcióval és választható célmappával"""
         result = {"suffix": None, "move": False}
         win = tk.Toplevel(self)
+        win.withdraw()  # csak a végleges helyén jelenjen meg, ne villanjon fel a képernyő sarkában
         win.title(self.t("suffix_title"))
         win.transient(self)
+        win.minsize(620, 0)
 
-        tk.Label(win, text=self.t("suffix_prompt")).pack(pady=5, padx=10)
+        tk.Label(win, text=self.t("suffix_prompt")).pack(pady=(14, 5), padx=20)
         btn_frame = tk.Frame(win)
         btn_frame.pack(pady=5)
 
         move_var = tk.BooleanVar(value=False)
+        saved_base = self.settings.move_base
+        base_var = tk.StringVar(value=saved_base)
 
         def choose(value):
             value = value.strip()
             if value:
                 result["suffix"] = value
                 result["move"] = move_var.get()
+                if base_var.get() != saved_base:  # egy épp kihúzott pendrive ne vesszen el a beállításból
+                    self.settings.move_base = base_var.get()
                 win.destroy()
 
         for s in self.prev_suffixes:
@@ -2976,10 +3024,42 @@ class ImageRenamerGUI(_BaseTk):
 
         suffix_var = tk.StringVar()
         entry = ttk.Entry(win, textvariable=suffix_var, width=30)
-        entry.pack(pady=5, padx=10)
+        entry.pack(fill=tk.X, pady=5, padx=20)
         entry.focus_set()
 
-        ttk.Checkbutton(win, text=self.t("move_check"), variable=move_var).pack(pady=5)
+        ttk.Checkbutton(win, text=self.t("move_check"), variable=move_var).pack(anchor="w", padx=20, pady=(10, 2))
+        base_row = tk.Frame(win)
+        base_row.pack(fill=tk.X, padx=20, pady=2)
+        tk.Label(base_row, text=self.t("move_base_label")).pack(side=tk.LEFT)
+        base_label = tk.Label(base_row, anchor="w")
+        base_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
+
+        def browse():
+            folder = filedialog.askdirectory(parent=win, title=self.t("move_base_title"),
+                                             initialdir=base_var.get() or self.folder or None)
+            if folder:
+                base_var.set(os.path.normpath(folder))
+                move_var.set(True)
+
+        reset_btn = ttk.Button(base_row, text=self.t("move_base_reset"), command=lambda: base_var.set(""))
+        reset_btn.pack(side=tk.RIGHT, padx=(4, 0))
+        ttk.Button(base_row, text=self.t("move_base_browse"), command=browse).pack(side=tk.RIGHT)
+        info = tk.Label(win, justify=tk.LEFT, anchor="w", wraplength=580)
+        info.pack(fill=tk.X, padx=20, pady=(2, 6))
+
+        day = self._earliest_known_day(self.selected_paths()) or self.t("move_date_placeholder")
+
+        def update_move_info(*_):
+            topic = suffix_var.get().strip()
+            topic = sanitize_component(topic) if topic else self.t("move_topic_placeholder")
+            base_label.config(text=base_var.get() or self.t("move_base_current"))
+            reset_btn.state(["!disabled"] if base_var.get() else ["disabled"])
+            info.config(text=self.t("move_folder", path=os.path.join(base_var.get() or self.folder, f"{day}_{topic}")),
+                        state=tk.NORMAL if move_var.get() else tk.DISABLED)
+
+        for var in (suffix_var, base_var, move_var):
+            var.trace_add("write", update_move_info)
+        update_move_info()
 
         bottom = tk.Frame(win)
         bottom.pack(pady=10)
@@ -2988,6 +3068,9 @@ class ImageRenamerGUI(_BaseTk):
         win.bind("<Return>", lambda e: choose(suffix_var.get()))
         win.bind("<Escape>", lambda e: win.destroy())
 
+        win.update_idletasks()
+        win.geometry(self._center_pos(max(620, win.winfo_reqwidth()), win.winfo_reqheight()))
+        win.deiconify()
         win.grab_set()
         self.wait_window(win)
 
@@ -2997,6 +3080,13 @@ class ImageRenamerGUI(_BaseTk):
             self.settings.recent_suffixes = self.prev_suffixes
             self.settings.save_settings()
         return result["suffix"], result["move"]
+
+    def _earliest_known_day(self, paths):
+        """A legkorábbi felvétel napja a már beolvasott dátumokból; None, ha még nem mind ismert."""
+        known = [self.date_cache.peek(p) for p in paths]
+        if not known or any(k is None or k[0] is None for k in known):
+            return None
+        return min(k[0] for k in known).strftime("%Y-%m-%d")
 
     def unmark_all(self):
         self.grid_view.select_all(False)

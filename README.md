@@ -41,6 +41,10 @@ Példa: `IMG_1234.jpg` → `2024-05-01_14-30-00_Balaton.jpg`
   vagy a `{place}` mező a sablonban. A fotó EXIF GPS-adatából vagy az iPhone-videó helyadatából a legközelebbi
   település neve kerül a névbe, pl. `2024-07-12_14-30-00_Balaton_Siófok.jpg`. Internet nélkül működik; ha nincs
   GPS-adat, vagy 25 km-en belül nincs település, a mező kimarad.
+- **Mozgatás új mappába**: az átnevezés ablakában bepipálva a program `ÉÉÉÉ-HH-NN_téma` nevű mappát hoz létre, és oda
+  teszi a fájlokat. Az ablak mutatja a mappa teljes útját. A mappa alapból a jelenlegi mappába kerül, de a *Tallózás*
+  gombbal más hely is megadható (másik meghajtó is), és ezt a program megjegyzi. Az áthelyezett fájlok rögtön
+  eltűnnek a listából, akkor is, ha az új mappa almappa és az *Almappák is* be van kapcsolva.
 - Ütközésvédelem: létező fájlt soha nem ír felül
 - **Rendezés napok szerint**: a kijelölt (vagy kijelölés nélkül az összes betöltött) fájlt a felvétel napja
   szerinti `ÉÉÉÉ-HH-NN` almappába helyezi át, a fájlnév megmarad. Előnézetet mutat (napokra bontva, az új
