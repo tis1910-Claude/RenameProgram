@@ -55,4 +55,4 @@ def test_rename_with_preview_and_shift(app, tmp_path, monkeypatch):
     target = folder / "2023-07-15_Nyaralás"
     # +1 óra: a 23:30-as kép átcsúszik a következő napra, a célmappa a legkorábbi napé
     assert sorted(os.listdir(target)) == ["2023-07-15_11-00-00_Nyaralás.jpg", "2023-07-16_00-30-00_Nyaralás.jpg"]
-    assert len(app.last_rename) == 2
+    assert len(app.history.last()["moves"]) == 2
