@@ -112,3 +112,12 @@ def test_grid_click_select_and_filter(app, tmp_path):
     app.filter_to.set("")
     _pump(app, 0.5)
     assert len(app.selected_paths()) == 4
+
+
+def test_buttons_wrap_in_narrow_window(app):
+    for width in (800, 1400):
+        app.geometry(f"{width}x600")
+        _pump(app, 0.5)
+        frame_w = app.btn_frame.winfo_width()
+        for btn in app._flow_order:
+            assert btn.winfo_ismapped() and btn.winfo_x() + btn.winfo_width() <= frame_w, btn.cget("text")
