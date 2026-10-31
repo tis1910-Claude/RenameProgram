@@ -16,7 +16,9 @@ Példa: `IMG_1234.jpg` → `2024-05-01_14-30-00_Balaton.jpg`
   „csak metaadat nélkül” (amelyeknél a fájl dátuma lenne a név). Az átnevezés, rendezés és törlés csak a látható,
   kijelölt fájlokra vonatkozik.
 - Dátum forrása: fotóknál EXIF (`DateTimeOriginal`), videóknál ffprobe (`creation_time`, iPhone-on az Apple saját mezője).
-  Ha egyik sincs, a fájl dátuma lesz használva, és a program ezt jelzi.
+  Ha nincs beágyazott dátum, a program a fájlnévből olvassa ki (WhatsApp `IMG-20230812-WA0001`, Android
+  `IMG_20230812_143015`, Pixel `PXL_…` (UTC), Messenger `FB_IMG_<időbélyeg>`, képernyőképek, Signal); az előnézet
+  ezt „(névből)” jelzéssel mutatja. Ha ez sincs, a fájl dátuma lesz használva, és a program ezt jelzi.
   Ha a videó a felvétel helyének időeltolását is tartalmazza (iPhone), a felvétel helyi ideje lesz a név, ahogy a
   fotóknál is, így egy külföldi út fotói és videói ugyanarra az órára és napra esnek. A csak UTC-t tartalmazó
   videóknál (`creation_time`) a gép helyi ideje lesz használva.
