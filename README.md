@@ -37,6 +37,10 @@ Példa: `IMG_1234.jpg` → `2024-05-01_14-30-00_Balaton.jpg`
 - **Live Photo párok** (iPhone: `IMG_1234.HEIC` + `IMG_1234.MOV`, azonos mappában, azonos névvel): a rácsban
   „LIVE” jelzést kapnak, és átnevezéskor, napi rendezéskor, törléskor és visszavonáskor együtt mozognak, akkor is,
   ha csak az egyik van kijelölve. A videó a fotóval azonos nevet és napot kap (csak a kiterjesztés más).
+- **Helyszín a névben** (választható, alapból ki van kapcsolva): *Beállítások → Helyszín a névben (GPS alapján)*,
+  vagy a `{place}` mező a sablonban. A fotó EXIF GPS-adatából vagy az iPhone-videó helyadatából a legközelebbi
+  település neve kerül a névbe, pl. `2024-07-12_14-30-00_Balaton_Siófok.jpg`. Internet nélkül működik; ha nincs
+  GPS-adat, vagy 25 km-en belül nincs település, a mező kimarad.
 - Ütközésvédelem: létező fájlt soha nem ír felül
 - **Rendezés napok szerint**: a kijelölt (vagy kijelölés nélkül az összes betöltött) fájlt a felvétel napja
   szerinti `ÉÉÉÉ-HH-NN` almappába helyezi át, a fájlnév megmarad. Előnézetet mutat (napokra bontva, az új
@@ -101,8 +105,14 @@ Kézzel:
 
 ```
 pip install pyinstaller
-pyinstaller --noconsole --onefile --add-data "*.png;." --collect-data sv_ttk --collect-all tkinterdnd2 --collect-all pillow_heif --collect-all rawpy --hidden-import PIL._tkinter_finder Keprename5video.py
+pyinstaller --noconsole --onefile --add-data "*.png;." --add-data "places.tsv.gz;." --collect-data sv_ttk --collect-all tkinterdnd2 --collect-all pillow_heif --collect-all rawpy --hidden-import PIL._tkinter_finder Keprename5video.py
 ```
 A `--collect-data sv_ttk` a Sun Valley megjelenés fájljait, a `--collect-all tkinterdnd2` a fogd és vidd
 programkönyvtárát csomagolja be. Amelyik csomag nincs telepítve, annak a kapcsolóját hagyd el.
 (Linuxon/macOS-en az `--add-data` elválasztója `:` a `;` helyett.)
+
+## Adatforrás
+
+A `places.tsv.gz` (kb. 2 MB, 155 000 település) a [GeoNames](https://www.geonames.org) legalább 1000 lakosú
+településeinek listájából készült (név, koordináta, országkód), a [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
+licenc szerint. Ha hiányzik, a program működik, csak a helyszín funkció nem érhető el.

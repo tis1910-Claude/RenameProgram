@@ -21,7 +21,9 @@ import platform
 import threading
 import subprocess
 import configparser
+import gzip
 import hashlib
+import math
 import io
 import time
 from collections import OrderedDict
@@ -143,7 +145,11 @@ TEXTS = {
         "tpl_prompt": ("Sablon formátum. Használható mezők:\n"
                        "{date} = 2024-05-01_14-30-00   {day} = 2024-05-01   {time} = 14-30-00\n"
                        "{suffix} = téma   {seq} = sorszám (001, 002...)   {original} = eredeti név\n"
-                       "{counter} = ütközésszámláló (csak ha kell, egyébként elhagyva)"),
+                       "{counter} = ütközésszámláló (csak ha kell, egyébként elhagyva)\n"
+                       "{place} = település a GPS alapján (pl. Siófok; ha nincs GPS, elhagyva)"),
+        "menu_place": "Helyszín a névben (GPS alapján)",
+        "place_on": ("A fájlnévbe a felvétel helyéhez legközelebbi település neve is bekerül, ha a fájlban "
+                     "van GPS-koordináta (internet nélkül). Példa:\n{example}"),
         "tpl_invalid": "Érvénytelen sablon: {err}",
         "tpl_saved": "Sablon elmentve. Példa:\n{example}",
         "lang_title": "Nyelv",
@@ -266,7 +272,11 @@ TEXTS = {
         "tpl_prompt": ("Template format. Available fields:\n"
                        "{date} = 2024-05-01_14-30-00   {day} = 2024-05-01   {time} = 14-30-00\n"
                        "{suffix} = topic   {seq} = sequence (001, 002...)   {original} = original name\n"
-                       "{counter} = collision counter (only when needed, otherwise omitted)"),
+                       "{counter} = collision counter (only when needed, otherwise omitted)\n"
+                       "{place} = town from GPS (e.g. Siófok; omitted when there is no GPS)"),
+        "menu_place": "Place in the name (from GPS)",
+        "place_on": ("The name of the town nearest to where the photo was taken is added to the file name "
+                     "when the file has GPS coordinates (works offline). Example:\n{example}"),
         "tpl_invalid": "Invalid template: {err}",
         "tpl_saved": "Template saved. Example:\n{example}",
         "lang_title": "Language",
@@ -596,8 +606,13 @@ def _read_moov(path):
 
 
 def _apple_creationdate(moov):
-    """moov/meta (vagy moov/udta/meta) keys+ilst: com.apple.quicktime.creationdate
-    (helyi idő + eltolás), vagy None."""
+    """com.apple.quicktime.creationdate (helyi idő + eltolás), vagy None."""
+    return _apple_keys(moov).get("com.apple.quicktime.creationdate")
+
+
+def _apple_keys(moov):
+    """moov/meta (vagy moov/udta/meta) keys+ilst szöveges értékei: {kulcs: érték}."""
+    result = {}
     metas = []
     for kind, start, end in _iter_boxes(moov):
         if kind == b"meta":
@@ -625,12 +640,12 @@ def _apple_creationdate(moov):
             continue
         for item, s, e in _iter_boxes(moov, *ilst):
             index = int.from_bytes(item, "big")
-            if not 1 <= index <= len(keys) or keys[index - 1] != "com.apple.quicktime.creationdate":
+            if not 1 <= index <= len(keys):
                 continue
             for sub, ds, de in _iter_boxes(moov, s, e):
-                if sub == b"data":
-                    return moov[ds + 8:de].decode("utf-8", "replace").strip("\x00 ")
-    return None
+                if sub == b"data" and int.from_bytes(moov[ds:ds + 4], "big") == 1:  # 1 = UTF-8 szöveg
+                    result.setdefault(keys[index - 1], moov[ds + 8:de].decode("utf-8", "replace").strip("\x00 "))
+    return result
 
 
 def read_bmff_metadata(path):
@@ -642,7 +657,7 @@ def read_bmff_metadata(path):
         return {}
     if not moov:
         return {}
-    result = {"creation_time": None, "apple_date": None, "duration": None}
+    result = {"creation_time": None, "apple_date": None, "apple_location": None, "duration": None}
     for kind, start, end in _iter_boxes(moov):
         if kind == b"mvhd" and end - start >= 32:
             version = moov[start]
@@ -663,7 +678,9 @@ def read_bmff_metadata(path):
             if timescale:
                 result["duration"] = duration / timescale
     try:
-        result["apple_date"] = _apple_creationdate(moov)
+        apple = _apple_keys(moov)
+        result["apple_date"] = apple.get("com.apple.quicktime.creationdate")
+        result["apple_location"] = apple.get("com.apple.quicktime.location.ISO6709")
     except (IndexError, ValueError):
         pass
     return result
@@ -761,9 +778,10 @@ def get_media_datetime(path):
 # ---------------------------------------------------------------------------
 # Névsablon és átnevezési terv (GUI-független)
 # ---------------------------------------------------------------------------
-PATTERN_FIELDS = {"date", "day", "time", "suffix", "counter", "seq", "original"}
+PATTERN_FIELDS = {"date", "day", "time", "suffix", "counter", "seq", "original", "place"}
 _INVALID_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _COUNTER_MARK = "\x00CNT\x00"
+_EMPTY_MARK = "\x00EMPTY\x00"
 
 
 def sanitize_component(text):
@@ -794,8 +812,19 @@ def validate_pattern(pattern):
     return None
 
 
-def render_name(pattern, dt, suffix, counter=0, seq=1, original="", ext=""):
+def pattern_with_place(pattern):
+    """A sablon kiegészítése a {place} mezővel (a téma után), ha még nincs benne."""
+    if "{place}" in pattern:
+        return pattern
+    if "{suffix}" in pattern:
+        return pattern.replace("{suffix}", "{suffix}_{place}", 1)
+    return pattern.replace("{counter}", "{place}_{counter}", 1) if "{counter}" in pattern else pattern + "_{place}"
+
+
+def render_name(pattern, dt, suffix, counter=0, seq=1, original="", ext="", place=""):
+    place = sanitize_component(place or "")
     values = {
+        "place": place or _EMPTY_MARK,
         "date": dt.strftime("%Y-%m-%d_%H-%M-%S"),
         "day": dt.strftime("%Y-%m-%d"),
         "time": dt.strftime("%H-%M-%S"),
@@ -810,6 +839,8 @@ def render_name(pattern, dt, suffix, counter=0, seq=1, original="", ext=""):
     else:
         # A 0-s számlálót a előtte álló elválasztóval együtt elhagyjuk: a_b_{counter} -> a_b
         name = re.sub(r"[_\-. ]?" + re.escape(_COUNTER_MARK), "", name)
+    # Ismeretlen helyszín: a mező az előtte álló elválasztóval együtt kimarad
+    name = re.sub(r"[_\-. ]?" + re.escape(_EMPTY_MARK), "", name)
     if counter and "{counter}" not in pattern:
         name = f"{name}_{counter}"
     name = sanitize_component(name).strip(" _-") or "media"
@@ -872,7 +903,7 @@ def _split_partners(items, partners):
     return [it for it in items if it[0] not in followers], partners
 
 
-def plan_renames(items, suffix, pattern, target_dir=None, exists=os.path.exists, partners=None):
+def plan_renames(items, suffix, pattern, target_dir=None, exists=os.path.exists, partners=None, places=None):
     """items: [(útvonal, datetime)] -> [(régi, új)].
     A tervezett nevek egymással és a lemezen lévő fájlokkal sem ütközhetnek.
     partners: {fotó: [videó]} (Live Photo): a videó a fotóval azonos nevet kap, csak a kiterjesztés más."""
@@ -886,7 +917,7 @@ def plan_renames(items, suffix, pattern, target_dir=None, exists=os.path.exists,
         group = [path] + partners.get(path, [])
         counter = 0
         while True:
-            base = render_name(pattern, dt, suffix, counter, seq, stem, "")
+            base = render_name(pattern, dt, suffix, counter, seq, stem, "", (places or {}).get(path, ""))
             news = [os.path.join(folder, base + os.path.splitext(p)[1]) for p in group]
             if all(_key(n) not in reserved and _is_free_for(n, p, exists) for n, p in zip(news, group)):
                 break
@@ -1081,6 +1112,110 @@ def remove_empty_folders(folders):
                 os.rmdir(folder)
         except OSError:
             pass
+
+
+# ---------------------------------------------------------------------------
+# Helyszín a GPS-koordinátából, internet nélkül (GUI-független)
+# ---------------------------------------------------------------------------
+# A places.tsv.gz a GeoNames (https://www.geonames.org) legalább 1000 lakosú településeit
+# tartalmazza (CC BY 4.0): név, szélesség, hosszúság, országkód.
+PLACES_FILE = "places.tsv.gz"
+_ISO6709 = re.compile(r"^([+-]\d+(?:\.\d+)?)([+-]\d+(?:\.\d+)?)")
+
+
+def _gps_to_degrees(value, ref):
+    d, m_, s_ = (float(x) for x in value)
+    deg = d + m_ / 60 + s_ / 3600
+    return -deg if str(ref).strip().upper() in ("S", "W") else deg
+
+
+def get_gps(path):
+    """(szélesség, hosszúság) fokban, vagy None. Fotó: EXIF GPS; videó: iPhone ISO 6709 kulcs vagy ffprobe."""
+    if is_video(path):
+        text = None
+        if path.lower().endswith(BMFF_EXTS):
+            text = read_bmff_metadata(path).get("apple_location")
+        if not text:
+            tags = probe_video(path).get("tags", {})
+            text = tags.get("com.apple.quicktime.location.iso6709") or tags.get("location")
+        match = _ISO6709.match(text or "")
+        if match:
+            lat, lon = float(match.group(1)), float(match.group(2))
+            if (lat, lon) != (0.0, 0.0):
+                return lat, lon
+        return None
+    try:
+        if is_raw(path) and exifread is not None:
+            with open(path, "rb") as f:
+                tags = exifread.process_file(f, details=False)
+            lat, lon = tags.get("GPS GPSLatitude"), tags.get("GPS GPSLongitude")
+            if lat and lon:
+                to_float = lambda v: [float(x.num) / float(x.den or 1) for x in v.values]
+                return (_gps_to_degrees(to_float(lat), tags.get("GPS GPSLatitudeRef", "N")),
+                        _gps_to_degrees(to_float(lon), tags.get("GPS GPSLongitudeRef", "E")))
+        with Image.open(path) as img:
+            gps = img.getexif().get_ifd(0x8825)
+        if 2 in gps and 4 in gps:
+            lat = _gps_to_degrees(gps[2], gps.get(1, "N"))
+            lon = _gps_to_degrees(gps[4], gps.get(3, "E"))
+            if (lat, lon) != (0.0, 0.0):
+                return lat, lon
+    except Exception as e:
+        print(f"GPS hiba ({path}): {e}")
+    return None
+
+
+class PlaceIndex:
+    """Legközelebbi település a koordinátához, 1 fokos rácsba rendezve (első használatkor töltődik be)."""
+    MAX_KM = 25  # ennél messzebb (pl. tengeren) nincs név
+
+    def __init__(self, path=None):
+        self.path = path or resource_path(PLACES_FILE)
+        self._cells = None
+        self._lock = threading.Lock()
+
+    def available(self):
+        return os.path.exists(self.path)
+
+    def _load(self):
+        with self._lock:
+            if self._cells is None:
+                cells = {}
+                with gzip.open(self.path, "rt", encoding="utf-8") as f:
+                    for line in f:
+                        if line.startswith("#"):
+                            continue
+                        name, lat, lon, _ = line.rstrip("\n").split("\t")
+                        lat, lon = float(lat), float(lon)
+                        cells.setdefault((math.floor(lat), math.floor(lon)), []).append((lat, lon, name))
+                self._cells = cells
+        return self._cells
+
+    def nearest(self, lat, lon):
+        try:
+            cells = self._load()
+        except (OSError, ValueError) as e:
+            print(f"Helyszín-adatbázis hiba: {e}")
+            return ""
+        best, best_d = "", self.MAX_KM ** 2
+        cos_lat = math.cos(math.radians(lat))
+        cy, cx = math.floor(lat), math.floor(lon)
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                for plat, plon, name in cells.get((cy + dy, (cx + dx + 180) % 360 - 180), ()):
+                    d = ((plat - lat) * 111.2) ** 2 + ((plon - lon) * 111.2 * cos_lat) ** 2
+                    if d < best_d:
+                        best, best_d = name, d
+        return best
+
+
+_place_index = PlaceIndex()
+
+
+def get_place(path, index=None):
+    """A felvétel helyéhez legközelebbi település neve, vagy "" (nincs GPS / nincs adatbázis)."""
+    gps = get_gps(path)
+    return (index or _place_index).nearest(*gps) if gps else ""
 
 
 # ---------------------------------------------------------------------------
@@ -1658,7 +1793,7 @@ class SettingsManager:
         self.config.read([legacy, self.config_file], encoding="utf-8")
         for section, defaults in (
                 ('UI', {'theme': DEFAULT_APPEARANCE, 'language': 'hu', 'recursive': 'yes', 'last_folder': ''}),
-                ('Naming', {'pattern': DEFAULT_PATTERN, 'recent_suffixes': '[]'})):
+                ('Naming', {'pattern': DEFAULT_PATTERN, 'recent_suffixes': '[]', 'place': 'no'})):
             if not self.config.has_section(section):
                 self.config.add_section(section)
             for key, value in defaults.items():
@@ -1691,6 +1826,17 @@ class SettingsManager:
     def language(self):
         lang = self.config['UI']['language']
         return lang if lang in TEXTS else 'hu'
+
+    @property
+    def place_enabled(self):
+        try:
+            return self.config.getboolean('Naming', 'place')
+        except ValueError:
+            return False
+
+    def effective_pattern(self):
+        """A sablon; ha a „Helyszín a névben” be van kapcsolva, a {place} mezővel kiegészítve."""
+        return pattern_with_place(self.pattern) if self.place_enabled else self.pattern
 
     @property
     def recent_suffixes(self):
@@ -1927,6 +2073,10 @@ class ImageRenamerGUI(_BaseTk):
                                             state=tk.NORMAL if available else tk.DISABLED)
         config_menu.add_cascade(label=self.t("menu_appearance"), menu=appearance_menu)
         config_menu.add_separator()
+        self.place_var = tk.BooleanVar(value=self.settings.place_enabled)
+        config_menu.add_checkbutton(label=self.t("menu_place"), variable=self.place_var,
+                                    command=self._on_place_toggle,
+                                    state=tk.NORMAL if _place_index.available() else tk.DISABLED)
         config_menu.add_checkbutton(label=self.t("chk_recursive"), variable=self.recursive_var,
                                     command=self._on_recursive_toggle)
         menu.add_cascade(label=self.t("menu_settings"), menu=config_menu)
@@ -1961,7 +2111,7 @@ class ImageRenamerGUI(_BaseTk):
             return
         self.settings.config['Naming']['pattern'] = template
         self.settings.save_settings()
-        example = render_name(template, datetime(2024, 5, 1, 14, 30, 0), "Balaton", 0, 1, "IMG_1234", ".jpg")
+        example = render_name(template, datetime(2024, 5, 1, 14, 30, 0), "Balaton", 0, 1, "IMG_1234", ".jpg", "Siófok")
         self.show_info(self.t("info"), self.t("tpl_saved", example=example))
 
     def set_language(self):
@@ -2164,6 +2314,14 @@ class ImageRenamerGUI(_BaseTk):
                     break
         except Exception:
             pass
+
+    def _on_place_toggle(self):
+        self.settings.config['Naming']['place'] = 'yes' if self.place_var.get() else 'no'
+        self.settings.save_settings()
+        if self.place_var.get():
+            example = render_name(self.settings.effective_pattern(), datetime(2024, 7, 12, 14, 30, 0), "Balaton",
+                                  place="Siófok", ext=".jpg")
+            self.show_info(self.t("info"), self.t("place_on", example=example))
 
     def _on_recursive_toggle(self):
         if self.busy:
@@ -2401,9 +2559,11 @@ class ImageRenamerGUI(_BaseTk):
         suffix, move_files = self.get_suffix()
         if not suffix:
             return
-        pattern, base_folder = self.settings.pattern, self.folder
+        pattern, base_folder = self.settings.effective_pattern(), self.folder
         # Live Photo: a fotó és a videója együtt mozog, akkor is, ha csak az egyik van kijelölve
         selected, partners = with_live_partners(selected, self.files)
+        followers = {v for vids in partners.values() for v in vids}
+        places = {}
 
         def work():
             items = []
@@ -2411,10 +2571,12 @@ class ImageRenamerGUI(_BaseTk):
                 self.call_in_ui(self.set_status, self.t("reading_dates", i=i, n=len(selected)))
                 dt, source = self.date_cache.get(path)
                 items.append((path, dt, source))
+                if "{place}" in pattern and path not in followers:
+                    places[path] = get_place(path)
             return items
 
         self.run_in_background(work, lambda items: self.after(
-            0, self._rename_preview, items, suffix, move_files, pattern, base_folder, partners))
+            0, self._rename_preview, items, suffix, move_files, pattern, base_folder, partners, places))
 
     def _add_shift_row(self, win, on_change):
         """Időeltolás mező az előnézetekhez. Vissza: függvény, ami a timedelta-t adja (hibánál None)."""
@@ -2467,7 +2629,7 @@ class ImageRenamerGUI(_BaseTk):
         win.bind("<Escape>", lambda e: win.destroy())
         return ok_btn
 
-    def _rename_preview(self, items, suffix, move_files, pattern, base_folder, partners=None):
+    def _rename_preview(self, items, suffix, move_files, pattern, base_folder, partners=None, places=None):
         self.set_status(self.t("ready"))
         file_dated = {path for path, _, source in items if source == "file"}
         name_dated = {path for path, _, source in items if source == "filename"}
@@ -2500,7 +2662,7 @@ class ImageRenamerGUI(_BaseTk):
                 return
             shifted = [(p, dt + delta) for p, dt, _ in items]
             target = move_target_folder(base_folder, shifted, suffix) if move_files else None
-            plan = plan_renames(shifted, suffix, pattern, target, partners=partners)
+            plan = plan_renames(shifted, suffix, pattern, target, partners=partners, places=places)
             dates = dict(shifted)
             for photo, videos in (partners or {}).items():
                 dates.update((v, dates[photo]) for v in videos if photo in dates)
