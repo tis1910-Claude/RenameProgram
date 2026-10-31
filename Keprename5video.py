@@ -1,4 +1,4 @@
-"""Media Renamer Pro 4.2
+"""Media Renamer Pro 4.3
 
 Képek és videók csoportos átnevezése a felvétel dátuma és egy téma alapján,
 opcionálisan közös (dátum_téma) mappába mozgatva, vagy napok szerint
@@ -6,7 +6,8 @@ opcionálisan közös (dátum_téma) mappába mozgatva, vagy napok szerint
 
 Kötelező függőség: Pillow.
 Opcionális: tkinterdnd2 (fogd és vidd), python-vlc + VLC (beépített lejátszó),
-send2trash (törlés lomtárba), ffmpeg/ffprobe a PATH-on (videó dátum, bélyegkép).
+send2trash (törlés lomtárba), sv-ttk (Sun Valley megjelenés),
+ffmpeg/ffprobe a PATH-on (videó dátum, bélyegkép).
 """
 import os
 import re
@@ -45,7 +46,12 @@ try:
 except Exception:
     send2trash = None
 
-APP_NAME = "Media Renamer Pro 4.2"
+try:
+    import sv_ttk
+except Exception:
+    sv_ttk = None
+
+APP_NAME = "Media Renamer Pro 4.3"
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp")
 VIDEO_EXTS = (".mp4", ".mov", ".avi", ".mkv", ".m4v", ".3gp", ".mts")
 MEDIA_EXTS = IMAGE_EXTS + VIDEO_EXTS
@@ -94,6 +100,13 @@ TEXTS = {
         "menu_edit": "Szerkesztés",
         "menu_templates": "Átnevezési sablonok",
         "menu_language": "Nyelv beállítása",
+        "menu_appearance": "Megjelenés",
+        "appearance_system": "Rendszer (alapértelmezett)",
+        "appearance_flat-light": "Világos",
+        "appearance_flat-dark": "Sötét",
+        "appearance_sun-valley-light": "Sun Valley világos (Windows 11)",
+        "appearance_sun-valley-dark": "Sun Valley sötét (Windows 11)",
+        "appearance_needs_sv": "  (pip install sv-ttk)",
         "tpl_title": "Átnevezési sablon",
         "tpl_prompt": ("Sablon formátum. Használható mezők:\n"
                        "{date} = 2024-05-01_14-30-00   {day} = 2024-05-01   {time} = 14-30-00\n"
@@ -173,6 +186,13 @@ TEXTS = {
         "menu_edit": "Edit",
         "menu_templates": "Naming templates",
         "menu_language": "Language",
+        "menu_appearance": "Appearance",
+        "appearance_system": "System (default)",
+        "appearance_flat-light": "Light",
+        "appearance_flat-dark": "Dark",
+        "appearance_sun-valley-light": "Sun Valley light (Windows 11)",
+        "appearance_sun-valley-dark": "Sun Valley dark (Windows 11)",
+        "appearance_needs_sv": "  (pip install sv-ttk)",
         "tpl_title": "Naming template",
         "tpl_prompt": ("Template format. Available fields:\n"
                        "{date} = 2024-05-01_14-30-00   {day} = 2024-05-01   {time} = 14-30-00\n"
@@ -236,6 +256,57 @@ TEXTS = {
         "daysort_errors": "{n} files could not be moved:\n",
     },
 }
+
+
+# ---------------------------------------------------------------------------
+# Megjelenés (a "téma" szó a programban az átnevezési témát jelenti)
+# ---------------------------------------------------------------------------
+# "system": a gép saját ttk témája és színei (Windowson "vista"), úgy, mint eddig.
+# "flat-*": a beépített "clam" ttk téma saját színekkel, nincs külső függőség.
+# "sun-valley-*": a Windows 11 stílusú sv-ttk csomag (MIT), ha telepítve van.
+APPEARANCES = ("system", "flat-light", "flat-dark", "sun-valley-light", "sun-valley-dark")
+DEFAULT_APPEARANCE = "system"
+SV_APPEARANCES = ("sun-valley-light", "sun-valley-dark")
+# A régi verziók "light" értéket írtak a settings.ini-be, de nem használták semmire
+_LEGACY_APPEARANCE = {"light": "system", "dark": "flat-dark"}
+
+# Klasszikus Tk widgetek színei; a ttk widgeteket a ttk téma színezi.
+#   canvas/thumb: a bélyegképrács és a bélyegkép háttere, warn: figyelmeztető szöveg
+PALETTES = {
+    "flat-light": {"bg": "#f3f4f6", "fg": "#1f2328", "field": "#ffffff", "canvas": "#ffffff",
+                   "thumb": "#e5e7eb", "button": "#ffffff", "button_active": "#e3ebfa",
+                   "border": "#d0d7de", "select_bg": "#2563eb", "select_fg": "#ffffff",
+                   "disabled": "#8c959f", "warn": "#a05000"},
+    "flat-dark": {"bg": "#1e1f22", "fg": "#e6e6e6", "field": "#2b2d31", "canvas": "#16171a",
+                  "thumb": "#2b2d31", "button": "#2b2d31", "button_active": "#3a3d44",
+                  "border": "#45484f", "select_bg": "#3b82f6", "select_fg": "#ffffff",
+                  "disabled": "#6b6f76", "warn": "#f0a040"},
+    # Az sv-ttk saját színei (theme/light.tcl, theme/dark.tcl)
+    "sun-valley-light": {"bg": "#fafafa", "fg": "#1c1c1c", "field": "#ffffff", "canvas": "#ffffff",
+                         "thumb": "#ececec", "button": "#ffffff", "button_active": "#e8e8e8",
+                         "border": "#d0d0d0", "select_bg": "#2f60d8", "select_fg": "#ffffff",
+                         "disabled": "#a0a0a0", "warn": "#a05000"},
+    "sun-valley-dark": {"bg": "#1c1c1c", "fg": "#fafafa", "field": "#2a2a2a", "canvas": "#202020",
+                        "thumb": "#2a2a2a", "button": "#2f2f2f", "button_active": "#3c3c3c",
+                        "border": "#454545", "select_bg": "#2f60d8", "select_fg": "#ffffff",
+                        "disabled": "#595959", "warn": "#f0a040"},
+}
+# A "system" megjelenésnél ezek maradnak (a korábbi verziók beégetett színei)
+SYSTEM_COLORS = {"canvas": "white", "thumb": "#eeeeee", "warn": "#a05000"}
+
+
+def normalize_appearance(name, sv_available=True):
+    """Ismeretlen vagy nem elérhető megjelenés helyett az alapértelmezettet adja."""
+    name = (name or "").strip().lower()
+    name = _LEGACY_APPEARANCE.get(name, name)
+    if name not in APPEARANCES or (name in SV_APPEARANCES and not sv_available):
+        return DEFAULT_APPEARANCE
+    return name
+
+
+def appearance_colors(name):
+    """A megjelenés extra színei (canvas, thumb, warn), a "system"-re is."""
+    return PALETTES.get(name, SYSTEM_COLORS)
 
 
 # ---------------------------------------------------------------------------
@@ -680,6 +751,7 @@ class ScrollableCanvas(tk.Frame):
         self.inner_frame.bind("<Configure>", self.on_inner_configure)
 
         self.check_vars = []
+        self.thumb_labels = []
         self._cols = None
         self.bind_mousewheel(self.canvas)
 
@@ -743,7 +815,7 @@ class SettingsManager:
         legacy = os.path.abspath('settings.ini')
         self.config.read([legacy, self.config_file], encoding="utf-8")
         for section, defaults in (
-                ('UI', {'theme': 'light', 'language': 'hu', 'recursive': 'yes', 'last_folder': ''}),
+                ('UI', {'theme': DEFAULT_APPEARANCE, 'language': 'hu', 'recursive': 'yes', 'last_folder': ''}),
                 ('Naming', {'pattern': DEFAULT_PATTERN, 'recent_suffixes': '[]'})):
             if not self.config.has_section(section):
                 self.config.add_section(section)
@@ -764,6 +836,14 @@ class SettingsManager:
     @property
     def pattern(self):
         return self.config['Naming']['pattern']
+
+    @property
+    def appearance(self):
+        return normalize_appearance(self.config['UI']['theme'], sv_ttk is not None)
+
+    @appearance.setter
+    def appearance(self, name):
+        self.config['UI']['theme'] = normalize_appearance(name)
 
     @property
     def language(self):
@@ -788,6 +868,13 @@ class ImageRenamerGUI(_BaseTk):
         super().__init__()
         self.settings = SettingsManager()
         self.lang = self.settings.language
+        # A gép saját megjelenése, mielőtt bármit átszíneznénk (a "Rendszer" visszaállításához)
+        self.style = ttk.Style(self)
+        self._native_ttk_theme = self.style.theme_use()
+        self._system_palette, self._system_widget_options = self._capture_system_look()
+        self.appearance = DEFAULT_APPEARANCE
+        self.colors = SYSTEM_COLORS
+        self.appearance_var = tk.StringVar(value=self.settings.appearance)
         self.title(APP_NAME)
         self.geometry("1000x700")
         self.minsize(800, 600)
@@ -866,6 +953,9 @@ class ImageRenamerGUI(_BaseTk):
             except Exception as e:
                 print(f"Fogd és vidd hiba: {e}")
 
+        self.bind_class("Toplevel", "<Map>", self._on_toplevel_map, add="+")
+        self.apply_appearance(self.settings.appearance)
+
         last = self.settings.config['UI'].get('last_folder', '')
         if last and os.path.isdir(last):
             self.folder = last
@@ -936,6 +1026,14 @@ class ImageRenamerGUI(_BaseTk):
                                 compound="left", command=self.edit_templates)
         config_menu.add_command(label=self.t("menu_language"), image=self.icons["folder"],
                                 compound="left", command=self.set_language)
+        appearance_menu = tk.Menu(config_menu, tearoff=0)
+        for name in APPEARANCES:
+            available = sv_ttk is not None or name not in SV_APPEARANCES
+            label = self.t("appearance_" + name) + ("" if available else self.t("appearance_needs_sv"))
+            appearance_menu.add_radiobutton(label=label, value=name, variable=self.appearance_var,
+                                            command=self._on_appearance_select,
+                                            state=tk.NORMAL if available else tk.DISABLED)
+        config_menu.add_cascade(label=self.t("menu_appearance"), menu=appearance_menu)
         config_menu.add_separator()
         config_menu.add_checkbutton(label=self.t("chk_recursive"), variable=self.recursive_var,
                                     command=self._on_recursive_toggle)
@@ -968,6 +1066,186 @@ class ImageRenamerGUI(_BaseTk):
             self.settings.config['UI']['language'] = lang.strip().lower()
             self.settings.save_settings()
             messagebox.showinfo(self.t("info"), self.t("restart"))
+
+    def _on_appearance_select(self):
+        self.apply_appearance(self.appearance_var.get())
+        self.settings.appearance = self.appearance
+        self.settings.save_settings()
+
+    # --- megjelenés --------------------------------------------------------
+    # A klasszikus Tk widgetek extra beállításai megjelenésenként (a színeken túl)
+    _WIDGET_OPTIONS = {
+        "Button": ("background", "activebackground", "foreground", "activeforeground", "relief",
+                   "overrelief", "borderwidth", "highlightthickness", "highlightbackground",
+                   "highlightcolor"),
+        "Checkbutton": ("selectcolor", "activebackground", "highlightthickness"),
+        "Menu": ("selectcolor", "activebackground", "activeforeground"),
+    }
+
+    def _capture_system_look(self):
+        """Az alapértelmezett Tk színek és widgetbeállítások, mielőtt bármit átírnánk."""
+        b, e, sb = tk.Button(self), tk.Entry(self), tk.Scrollbar(self)
+        palette = {"background": b.cget("background"), "foreground": b.cget("foreground"),
+                   "activeBackground": b.cget("activebackground"),
+                   "activeForeground": b.cget("activeforeground"),
+                   "highlightBackground": b.cget("highlightbackground"),
+                   "highlightColor": b.cget("highlightcolor"),
+                   "disabledForeground": b.cget("disabledforeground"),
+                   "selectBackground": e.cget("selectbackground"),
+                   "selectForeground": e.cget("selectforeground"),
+                   "insertBackground": e.cget("insertbackground"),
+                   "troughColor": sb.cget("troughcolor")}
+        protos = {"Button": b, "Checkbutton": tk.Checkbutton(self), "Menu": tk.Menu(self, tearoff=0)}
+        options = {cls: {opt: str(protos[cls].cget(opt)) for opt in opts}
+                   for cls, opts in self._WIDGET_OPTIONS.items()}
+        for w in (e, sb, *protos.values()):
+            w.destroy()
+        return palette, options
+
+    @staticmethod
+    def _tk_palette(c):
+        return {"background": c["bg"], "foreground": c["fg"], "activeBackground": c["button_active"],
+                "activeForeground": c["fg"], "highlightBackground": c["bg"],
+                "highlightColor": c["select_bg"], "disabledForeground": c["disabled"],
+                "selectBackground": c["select_bg"], "selectForeground": c["select_fg"],
+                "insertBackground": c["fg"], "troughColor": c["bg"]}
+
+    @staticmethod
+    def _widget_options(c):
+        return {
+            # Lapos gombok vékony kerettel; a keretet a highlight rajzolja, ez minden rendszeren működik
+            "Button": {"background": c["button"], "activebackground": c["button_active"],
+                       "foreground": c["fg"], "activeforeground": c["fg"], "relief": "flat",
+                       "overrelief": "flat", "borderwidth": "0", "highlightthickness": "1",
+                       "highlightbackground": c["border"], "highlightcolor": c["select_bg"]},
+            "Checkbutton": {"selectcolor": c["field"], "activebackground": c["bg"],
+                            "highlightthickness": "0"},
+            "Menu": {"selectcolor": c["fg"], "activebackground": c["select_bg"],
+                     "activeforeground": c["select_fg"]},
+        }
+
+    def _style_flat_ttk(self, c):
+        """A beépített "clam" ttk téma átszínezése (Világos/Sötét)."""
+        st = self.style
+        st.theme_use("clam")
+        st.configure(".", background=c["bg"], foreground=c["fg"], fieldbackground=c["field"],
+                     bordercolor=c["border"], lightcolor=c["bg"], darkcolor=c["bg"],
+                     troughcolor=c["bg"], selectbackground=c["select_bg"],
+                     selectforeground=c["select_fg"], insertcolor=c["fg"], focuscolor=c["select_bg"],
+                     arrowcolor=c["fg"])
+        st.map(".", foreground=[("disabled", c["disabled"])], background=[("disabled", c["bg"])])
+        st.configure("TButton", background=c["button"], lightcolor=c["button"], darkcolor=c["button"],
+                     bordercolor=c["border"], padding=(10, 4))
+        st.map("TButton",
+               background=[("pressed", c["select_bg"]), ("active", c["button_active"])],
+               foreground=[("disabled", c["disabled"]), ("pressed", c["select_fg"])],
+               lightcolor=[("pressed", c["select_bg"]), ("active", c["button_active"])],
+               darkcolor=[("pressed", c["select_bg"]), ("active", c["button_active"])],
+               bordercolor=[("focus", c["select_bg"])])
+        st.configure("TCheckbutton", indicatorbackground=c["field"], indicatorforeground=c["fg"])
+        st.map("TCheckbutton", background=[("active", c["bg"])],
+               indicatorbackground=[("pressed", c["button_active"]), ("selected", c["select_bg"])],
+               indicatorforeground=[("selected", c["select_fg"])])
+        st.configure("TEntry", fieldbackground=c["field"], foreground=c["fg"], insertcolor=c["fg"],
+                     lightcolor=c["field"], darkcolor=c["field"])
+        st.map("TEntry", bordercolor=[("focus", c["select_bg"])], lightcolor=[("focus", c["select_bg"])])
+        st.configure("Treeview", background=c["field"], fieldbackground=c["field"], foreground=c["fg"])
+        st.map("Treeview", background=[("selected", c["select_bg"])],
+               foreground=[("selected", c["select_fg"])])
+        st.configure("Treeview.Heading", background=c["button"], foreground=c["fg"],
+                     lightcolor=c["button"], darkcolor=c["button"], bordercolor=c["border"])
+        st.map("Treeview.Heading", background=[("active", c["button_active"])])
+        st.configure("TScrollbar", background=c["button"], troughcolor=c["bg"], bordercolor=c["border"],
+                     lightcolor=c["button"], darkcolor=c["button"], arrowcolor=c["fg"])
+        st.map("TScrollbar", background=[("active", c["button_active"]), ("pressed", c["select_bg"])])
+
+    def apply_appearance(self, name):
+        """Megjelenés váltása futás közben, újraindítás nélkül."""
+        name = normalize_appearance(name, sv_ttk is not None)
+        if name in SV_APPEARANCES:
+            sv_ttk.set_theme("dark" if name.endswith("dark") else "light", root=self)
+        elif name == "system":
+            self.style.theme_use(self._native_ttk_theme)
+        else:
+            self._style_flat_ttk(PALETTES[name])
+        # Az sv-ttk a <<ThemeChanged>> eseményre maga is átszínez: fusson le előbb,
+        # hogy a lenti beállítások legyenek a végsők
+        self.update_idletasks()
+        self.update()
+
+        colors = appearance_colors(name)
+        if name == "system":
+            palette, options = self._system_palette, self._system_widget_options
+        else:
+            palette, options = self._tk_palette(colors), self._widget_options(colors)
+        args = []
+        for key, value in palette.items():
+            args += [key, value]
+        self.tk.call("tk_setPalette", *args)
+        self._apply_widget_options(options)
+
+        self.scrollable_canvas.canvas.configure(bg=colors["canvas"])
+        # "Rendszer" módban marad a régi kinézet (szürke rács a fehér vásznon)
+        inner_bg = palette["background"] if name == "system" else colors["canvas"]
+        self.scrollable_canvas.inner_frame.configure(bg=inner_bg)
+        for lbl in self.scrollable_canvas.thumb_labels:
+            if lbl.winfo_exists():
+                lbl.configure(bg=colors["thumb"])
+        self.appearance, self.colors = name, colors
+        self.appearance_var.set(name)
+        for w in self._walk(self):
+            if isinstance(w, (tk.Tk, tk.Toplevel)):
+                self._set_titlebar_dark(w)
+
+    @staticmethod
+    def _walk(widget):
+        yield widget
+        for child in widget.winfo_children():
+            yield from ImageRenamerGUI._walk(child)
+
+    def _apply_widget_options(self, options):
+        """A meglévő widgetekre is, és az option adatbázisba is (az ezután nyíló ablakoknak)."""
+        for w in self._walk(self):
+            values = options.get(w.winfo_class())
+            if values:
+                try:
+                    w.configure(**values)
+                except tk.TclError:
+                    pass
+        for cls, values in options.items():
+            for opt, value in values.items():
+                db_name = self._db_names.get(opt, opt)
+                # A tk_setPalette a meglévő osztályokra 60-as prioritással ír, ez legyen erősebb
+                self.option_add(f"*{cls}.{db_name}", value, 70)
+
+    _db_names = {"activebackground": "activeBackground", "activeforeground": "activeForeground",
+                 "overrelief": "overRelief", "borderwidth": "borderWidth",
+                 "highlightthickness": "highlightThickness", "highlightbackground": "highlightBackground",
+                 "highlightcolor": "highlightColor", "selectcolor": "selectColor"}
+
+    @property
+    def is_dark(self):
+        return self.appearance.endswith("dark")
+
+    def _on_toplevel_map(self, event):
+        if isinstance(event.widget, tk.Toplevel):
+            self._set_titlebar_dark(event.widget)
+
+    def _set_titlebar_dark(self, window):
+        """Windows 10/11: sötét címsor a sötét megjelenésekhez (máshol nem csinál semmit)."""
+        if not IS_WINDOWS:
+            return
+        try:
+            import ctypes
+            hwnd = ctypes.windll.user32.GetParent(window.winfo_id())
+            value = ctypes.c_int(1 if self.is_dark else 0)
+            # 20 = DWMWA_USE_IMMERSIVE_DARK_MODE; a Windows 10 régebbi kiadásain 19
+            for attribute in (20, 19):
+                if ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                        hwnd, attribute, ctypes.byref(value), ctypes.sizeof(value)) == 0:
+                    break
+        except Exception:
+            pass
 
     def _on_recursive_toggle(self):
         self.settings.config['UI']['recursive'] = 'yes' if self.recursive_var.get() else 'no'
@@ -1017,6 +1295,7 @@ class ImageRenamerGUI(_BaseTk):
         for widget in self.scrollable_canvas.inner_frame.winfo_children():
             widget.destroy()
         self.scrollable_canvas.check_vars.clear()
+        self.scrollable_canvas.thumb_labels.clear()
         self.scrollable_canvas.canvas.yview_moveto(0)
 
     def update_gui(self, files):
@@ -1028,8 +1307,9 @@ class ImageRenamerGUI(_BaseTk):
             frame = tk.Frame(inner_frame, width=160, height=180)
             frame.grid_propagate(False)
 
-            lbl = tk.Label(frame, bg="#eeeeee")
+            lbl = tk.Label(frame, bg=self.colors["thumb"])
             lbl.place(x=0, y=0, width=150, height=150)
+            self.scrollable_canvas.thumb_labels.append(lbl)
             self.async_loader.add_task(path, partial(self.call_in_ui, self._set_thumbnail, lbl))
 
             var = tk.BooleanVar()
@@ -1264,7 +1544,7 @@ class ImageRenamerGUI(_BaseTk):
         summary.pack(fill=tk.X, padx=10, pady=(10, 4))
         if file_dated:
             tk.Label(win, text=self.t("daysort_file_dates", n=len(file_dated)), justify=tk.LEFT,
-                     anchor="w", wraplength=720, fg="#a05000").pack(fill=tk.X, padx=10)
+                     anchor="w", wraplength=720, fg=self.colors["warn"]).pack(fill=tk.X, padx=10)
             ttk.Checkbutton(win, text=self.t("daysort_include_file"), variable=include_var,
                             command=lambda: refresh()).pack(anchor="w", padx=10, pady=4)
 
