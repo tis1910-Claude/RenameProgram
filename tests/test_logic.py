@@ -88,6 +88,19 @@ ok(p4[0][1].endswith("_X_1"+os.path.splitext(src_)[1]), f"létező fájl nem ír
 ini = os.path.join(d, "cfg", "settings.ini")
 s = m.SettingsManager(ini); s.recent_suffixes=["Balaton","Esküvő"]; s.save_settings()
 ok(m.SettingsManager(ini).recent_suffixes==["Balaton","Esküvő"], "témák mentése/visszaolvasása (ékezettel)")
+
+# megjelenés
+ok(m.SettingsManager(ini).appearance == "system", "alapértelmezett megjelenés: system")
+s = m.SettingsManager(ini); s.appearance = "flat-dark"; s.save_settings()
+ok(m.SettingsManager(ini).appearance == "flat-dark", "megjelenés mentése/visszaolvasása")
+ok(m.normalize_appearance("light") == "system", "régi 'light' érték -> system (nem változik a kinézet)")
+ok(m.normalize_appearance("Sun-Valley-Dark") == "sun-valley-dark", "kis-/nagybetű mindegy")
+ok(m.normalize_appearance("sun-valley-dark", sv_available=False) == "system", "sv-ttk nélkül system")
+ok(m.normalize_appearance("rózsaszín") == "system", "ismeretlen érték -> system")
+keys = set(m.PALETTES["flat-light"])
+ok(all(set(p) == keys for p in m.PALETTES.values()) and set(m.SYSTEM_COLORS) <= keys,
+   "minden paletta ugyanazokat a színeket adja meg")
+ok(all(m.TEXTS[l].get("appearance_" + a) for l in m.TEXTS for a in m.APPEARANCES), "megjelenésnevek hu/en")
 shutil.rmtree(d)
 
 # rendezés napok szerint

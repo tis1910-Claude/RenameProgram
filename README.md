@@ -22,6 +22,12 @@ Példa: `IMG_1234.jpg` → `2024-05-01_14-30-00_Balaton.jpg`
 - Törlés lomtárba (`send2trash`), almappák be-/kikapcsolása, mappa behúzása az ablakba
 - Beépített VLC-lejátszó (ha nincs VLC, a rendszer alapértelmezett lejátszója nyílik meg)
 - Magyar és angol felület
+- Választható megjelenés (*Beállítások → Megjelenés*), azonnal vált, és megmarad:
+  - **Rendszer**: a gép saját kinézete, mint eddig (alapértelmezett)
+  - **Világos** és **Sötét**: lapos, modern színek, külső csomag nélkül
+  - **Sun Valley világos / sötét**: Windows 11 stílus, ehhez kell az `sv-ttk` csomag
+
+  Windowson a sötét megjelenéseknél a címsor is sötét lesz.
 
 ## Telepítés
 
@@ -58,6 +64,8 @@ python tests/test_logic.py
 
 ```
 pip install pyinstaller
-pyinstaller --noconsole --onefile --add-data "*.png;." Keprename5video.py
+pyinstaller --noconsole --onefile --add-data "*.png;." --collect-data sv_ttk --collect-all tkinterdnd2 --hidden-import PIL._tkinter_finder Keprename5video.py
 ```
+A `--collect-data sv_ttk` a Sun Valley megjelenés fájljait, a `--collect-all tkinterdnd2` a fogd és vidd
+programkönyvtárát csomagolja be. Amelyik csomag nincs telepítve, annak a kapcsolóját hagyd el.
 (Linuxon/macOS-en az `--add-data` elválasztója `:` a `;` helyett.)
