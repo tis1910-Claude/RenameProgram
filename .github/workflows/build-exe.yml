@@ -24,7 +24,10 @@ jobs:
         shell: pwsh
         run: |
           $data = @()
-          foreach ($png in Get-ChildItem -Filter *.png) { $data += @("--add-data", "$($png.Name);.") }
+          # Ikonok és a helyszín-adatbázis, ha megvannak (hiányzó fájl nem állítja meg a buildet)
+          foreach ($f in Get-ChildItem -Path *.png, places.tsv.gz -Name -ErrorAction SilentlyContinue) {
+            $data += @("--add-data", "$f;.")
+          }
           pyinstaller --noconfirm --noconsole --onefile --name MediaRenamerPro `
             @data --collect-data sv_ttk --collect-all tkinterdnd2 --collect-all pillow_heif --collect-all rawpy `
             --hidden-import PIL._tkinter_finder Keprename5video.py
