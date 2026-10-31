@@ -21,7 +21,10 @@ import platform
 import threading
 import subprocess
 import configparser
+import hashlib
 import io
+import time
+from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 from functools import partial
 
@@ -182,6 +185,17 @@ TEXTS = {
         "video_error": "Videólejátszási hiba: {err}",
         "player_title": "Videólejátszó - {name}",
         "open_error": "Hiba a megnyitáskor: {err}",
+        "filter_kind": "Típus:",
+        "filter_all": "Mind",
+        "filter_images": "Képek",
+        "filter_videos": "Videók",
+        "filter_raw": "RAW",
+        "filter_search": "Keresés:",
+        "filter_from": "Dátum:",
+        "filter_to": "–",
+        "filter_file_dated": "Csak metaadat nélkül",
+        "count_selected": "{sel} kijelölve / {shown} látható",
+        "count_filtered": " (összesen {total})",
         "btn_daysort": "Rendezés napok szerint",
         "daysort_all": "Nincs kijelölt fájl. Rendezed mind a {n} betöltött fájlt?",
         "daysort_title": "Rendezés napok szerint - előnézet",
@@ -269,6 +283,17 @@ TEXTS = {
         "video_error": "Video playback error: {err}",
         "player_title": "Video player - {name}",
         "open_error": "Error while opening: {err}",
+        "filter_kind": "Type:",
+        "filter_all": "All",
+        "filter_images": "Images",
+        "filter_videos": "Videos",
+        "filter_raw": "RAW",
+        "filter_search": "Search:",
+        "filter_from": "Date:",
+        "filter_to": "–",
+        "filter_file_dated": "No metadata only",
+        "count_selected": "{sel} selected / {shown} shown",
+        "count_filtered": " (total {total})",
         "btn_daysort": "Sort by day",
         "daysort_all": "No files selected. Sort all {n} loaded files?",
         "daysort_title": "Sort by day - preview",
@@ -324,6 +349,11 @@ PALETTES = {
 }
 # A "system" megjelenésnél ezek maradnak (a korábbi verziók beégetett színei)
 SYSTEM_COLORS = {"canvas": "white", "thumb": "#eeeeee", "warn": "#a05000"}
+
+
+def _blend(rgb_a, rgb_b, ratio):
+    """Két (r, g, b) szín keveréke #rrggbb alakban (ratio = az első aránya, 0-255 komponensek)."""
+    return "#" + "".join(f"{round(x * ratio + y * (1 - ratio)):02x}" for x, y in zip(rgb_a, rgb_b))
 
 
 def normalize_appearance(name, sv_available=True):
@@ -761,6 +791,75 @@ def scan_media(folder, recursive=True):
     return files
 
 
+class DateCache:
+    """Szálbiztos gyorsítótár a get_media_datetime eredményeihez. A kulcs az útvonal,
+    módosítási idő és méret, így átnevezés vagy módosítás után újraolvas."""
+
+    def __init__(self, reader=None):
+        self._reader = reader or get_media_datetime
+        self._data = {}
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def _key(path):
+        st = os.stat(path)
+        return path, st.st_mtime_ns, st.st_size
+
+    def peek(self, path):
+        """(datetime, forrás) ha már ismert, különben None. Nem olvas fájlt (a GUI szálon is hívható)."""
+        with self._lock:
+            return self._data.get(path, (None, None))[1]
+
+    def get(self, path):
+        key = self._key(path)
+        with self._lock:
+            hit = self._data.get(path)
+        if hit and hit[0] == key:
+            return hit[1]
+        value = self._reader(path)
+        with self._lock:
+            self._data[path] = (key, value)
+        return value
+
+
+# ---------------------------------------------------------------------------
+# Szűrés (GUI-független)
+# ---------------------------------------------------------------------------
+FILTER_KINDS = ("all", "images", "videos", "raw")
+
+
+def parse_day(text):
+    """'2024-05-01' vagy '2024.05.01' -> date, üres -> None, hibás -> ValueError."""
+    text = (text or "").strip().replace(".", "-").rstrip("-")
+    if not text:
+        return None
+    return datetime.strptime(text, "%Y-%m-%d").date()
+
+
+def filter_paths(paths, kind="all", text="", day_from=None, day_to=None, only_file_dated=False,
+                 date_of=lambda p: None):
+    """A szűrőknek megfelelő útvonalak, eredeti sorrendben. date_of(p) -> (datetime, forrás) vagy
+    None, ha a dátum még nem ismert: ilyenkor a dátumos szűrők nem rejtik el a fájlt."""
+    needle = text.strip().casefold()
+    result = []
+    for p in paths:
+        if kind == "images" and is_video(p) or kind == "videos" and not is_video(p) \
+                or kind == "raw" and not is_raw(p):
+            continue
+        if needle and needle not in os.path.basename(p).casefold():
+            continue
+        if day_from or day_to or only_file_dated:
+            known = date_of(p)
+            if known:
+                dt, source = known
+                if day_from and dt.date() < day_from or day_to and dt.date() > day_to:
+                    continue
+                if only_file_dated and source != "file":
+                    continue
+        result.append(p)
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Rendezés napok szerint: base/ÉÉÉÉ-HH-NN/eredeti_név (GUI-független)
 # ---------------------------------------------------------------------------
@@ -822,19 +921,101 @@ def remove_empty_folders(folders):
 # ---------------------------------------------------------------------------
 # Bélyegképek (háttérszálban csak PIL kép készül, PhotoImage a fő szálon)
 # ---------------------------------------------------------------------------
+def _cache_dir():
+    if IS_WINDOWS:
+        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    elif IS_MAC:
+        base = os.path.expanduser("~/Library/Caches")
+    else:
+        base = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+    return os.path.join(base, "MediaRenamerPro", "thumbs")
+
+
+class ThumbnailCache:
+    """Lemezes bélyegkép-gyorsítótár. A kulcs az útvonal + módosítási idő + méret, így egy
+    megváltozott fájl új bélyegképet kap. A mérete a prune() hívásakor korlátozódik."""
+    VERSION = "1"
+
+    def __init__(self, folder=None, max_bytes=300 * 1024 * 1024):
+        self.folder = folder or _cache_dir()
+        self.max_bytes = max_bytes
+        self.enabled = True
+
+    def _file(self, path, size):
+        st = os.stat(path)
+        raw = f"{self.VERSION}|{os.path.abspath(path)}|{st.st_mtime_ns}|{st.st_size}|{size[0]}x{size[1]}"
+        digest = hashlib.sha1(raw.encode("utf-8", "surrogatepass")).hexdigest()
+        return os.path.join(self.folder, digest[:2], digest + ".jpg")
+
+    def get(self, path, size):
+        if not self.enabled:
+            return None
+        try:
+            cached = self._file(path, size)
+            with Image.open(cached) as img:
+                img.load()
+                return img.copy()
+        except (OSError, ValueError):
+            return None
+
+    def put(self, path, size, img):
+        if not self.enabled:
+            return
+        try:
+            cached = self._file(path, size)
+            os.makedirs(os.path.dirname(cached), exist_ok=True)
+            tmp = f"{cached}.{threading.get_ident()}.tmp"
+            img.convert("RGB").save(tmp, "JPEG", quality=85)
+            os.replace(tmp, cached)
+        except OSError as e:
+            print(f"Gyorsítótár írási hiba: {e}")
+
+    def prune(self, keep_ratio=0.7):
+        """Ha a gyorsítótár túl nagy, a legrégebben használt fájlokat törli a keret 70%-áig."""
+        entries, total = [], 0
+        for root, _, names in os.walk(self.folder):
+            for n in names:
+                p = os.path.join(root, n)
+                try:
+                    st = os.stat(p)
+                except OSError:
+                    continue
+                entries.append((max(st.st_atime, st.st_mtime), st.st_size, p))
+                total += st.st_size
+        if total <= self.max_bytes:
+            return 0
+        removed = 0
+        for _, nbytes, p in sorted(entries):
+            if total <= self.max_bytes * keep_ratio:
+                break
+            try:
+                os.remove(p)
+                total -= nbytes
+                removed += 1
+            except OSError:
+                pass
+        return removed
+
+
 class ThumbnailGenerator:
     _icon = None
     _icon_lock = threading.Lock()
+    cache = ThumbnailCache()
 
     @staticmethod
     def generate(path, size=THUMB_SIZE):
+        """Mindig ad képet: a gyorsítótárból, frissen készítve, vagy hiba esetén szürkét.
+        A szürke tartalék nem kerül a gyorsítótárba (pl. az ffmpeg később telepíthető)."""
+        img = ThumbnailGenerator.cache.get(path, size)
+        if img is not None:
+            return img
         try:
-            if is_video(path):
-                return ThumbnailGenerator._video(path, size)
-            return ThumbnailGenerator._image(path, size)
+            img = ThumbnailGenerator._video(path, size) if is_video(path) else ThumbnailGenerator._image(path, size)
         except Exception as e:
             print(f"Bélyegkép hiba ({path}): {e}")
             return Image.new('RGB', size, color='gray')
+        ThumbnailGenerator.cache.put(path, size, img)
+        return img
 
     @staticmethod
     def _raw_preview(path):
@@ -903,7 +1084,7 @@ class ThumbnailGenerator:
     @staticmethod
     def _video(path, size):
         if not shutil.which("ffmpeg"):
-            return Image.new('RGB', size, color='gray')
+            raise RuntimeError("nincs ffmpeg")
         duration = None
         if path.lower().endswith(BMFF_EXTS):
             duration = read_bmff_metadata(path).get("duration")
@@ -915,7 +1096,7 @@ class ThumbnailGenerator:
         if not out and pos > 0:
             out = ThumbnailGenerator._grab_frame(path, 0)
         if not out:
-            return Image.new('RGB', size, color='gray')
+            raise RuntimeError("az ffmpeg nem adott képkockát")
         img = Image.open(io.BytesIO(out))
         img.thumbnail(size)
         img = img.convert("RGBA")
@@ -927,10 +1108,11 @@ class ThumbnailGenerator:
 
 class AsyncThumbnailLoader:
     """Munkaszálak, amelyek PIL képet adnak vissza egy callback-en keresztül.
-    A callback-et a hívó (GUI) köteles a fő szálra továbbítani."""
+    A callback-et a hívó (GUI) köteles a fő szálra továbbítani. A sor LIFO: görgetés után
+    az éppen látható képek készülnek el először, nem a már elgörgetettek."""
 
     def __init__(self, max_workers=4):
-        self.queue = queue.Queue()
+        self.queue = queue.LifoQueue()
         self.max_workers = max_workers
         self.stop_flag = threading.Event()
         self.generation = 0
@@ -971,41 +1153,199 @@ class AsyncThumbnailLoader:
 # ---------------------------------------------------------------------------
 # GUI
 # ---------------------------------------------------------------------------
-class ScrollableCanvas(tk.Frame):
-    CELL_WIDTH = 170
+def short_name(name, limit=40):
+    """Hosszú fájlnév rövidítése a közepéből, a kiterjesztés megmarad."""
+    if len(name) <= limit:
+        return name
+    keep = limit - 1
+    return name[:keep - keep // 3] + "…" + name[-(keep // 3):]
 
-    def __init__(self, parent):
+
+class ThumbGrid(tk.Frame):
+    """Bélyegképrács egyetlen vásznon. Csak a látható cellák rajzolódnak ki, és csak azok
+    bélyegképe töltődik be, így több ezer fájlnál sem lassul be, és nem eszi a memóriát.
+
+    Egér: kattintás = kijelölés be/ki, Shift+kattintás = tartomány, dupla kattintás = megnyitás,
+    a 📁 jel = megnyitás a fájlkezelőben."""
+    CELL_W, CELL_H = 170, 192
+    THUMB_X, THUMB_Y = 10, 4
+    MAX_PHOTOS = 400  # ennyi PhotoImage marad memóriában (kb. 36 MB)
+
+    def __init__(self, parent, loader, call_in_ui, on_open, on_locate, on_selection_change):
         super().__init__(parent)
-        self.canvas = tk.Canvas(self, bg="white", highlightthickness=0)
-        self.scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        self.canvas = tk.Canvas(self, bg="white", highlightthickness=0, yscrollincrement=self.CELL_H // 4)
+        self.scrollbar = ttk.Scrollbar(self, orient="vertical", command=self._yview)
         self.canvas.configure(yscrollcommand=self.scrollbar.set)
         self.scrollbar.pack(side="right", fill="y")
         self.canvas.pack(side="left", fill="both", expand=True)
 
-        self.inner_frame = tk.Frame(self.canvas)
-        self.canvas.create_window((0, 0), window=self.inner_frame, anchor="nw", tags="inner_frame")
-        self.canvas.bind("<Configure>", self.on_canvas_configure)
-        self.inner_frame.bind("<Configure>", self.on_inner_configure)
+        self.loader, self.call_in_ui = loader, call_in_ui
+        self.on_open, self.on_locate, self.on_selection_change = on_open, on_locate, on_selection_change
+        self.paths = []          # a látható (szűrt) lista, sorrendben
+        self.labels = {}         # útvonal -> megjelenített név
+        self.selected = set()    # kijelölt útvonalak (a szűrés nem törli)
+        self.anchor = None       # a Shift+kattintás tartományának kezdete
+        self.photos = OrderedDict()  # útvonal -> PhotoImage (LRU)
+        self.pending = set()
+        self.cols = 1
+        self.colors = {"canvas": "white", "thumb": "#eeeeee", "fg": "black", "select": "#2563eb",
+                       "select_fill": "#dbe6fd"}
+        self._redraw_job = None
 
-        self.check_vars = []
-        self.thumb_labels = []
-        self._cols = None
+        self.canvas.bind("<Configure>", lambda e: self._layout())
+        self.canvas.bind("<Button-1>", self._on_click)
+        self.canvas.bind("<Shift-Button-1>", lambda e: self._on_click(e, extend=True))
+        self.canvas.bind("<Double-Button-1>", self._on_double)
         self.bind_mousewheel(self.canvas)
 
-    def on_canvas_configure(self, event):
-        self.canvas.itemconfig("inner_frame", width=event.width)
-        self.update_layout()
+    # --- adatok ------------------------------------------------------------
+    def set_items(self, paths, labels):
+        """Új mappa: a régi bélyegképek és kijelölés eldobása."""
+        self.loader.clear()
+        self.pending.clear()
+        self.photos.clear()
+        self.selected.clear()
+        self.anchor = None
+        self.labels = labels
+        self.show(paths)
+        self.canvas.yview_moveto(0)
 
-    def on_inner_configure(self, event):
-        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+    def show(self, paths):
+        """Szűrés: csak a látható lista változik, a kijelölés és a bélyegképek megmaradnak."""
+        self.paths = list(paths)
+        self._layout(force=True)
 
-    def update_layout(self, force=False):
-        cols = max(1, self.canvas.winfo_width() // self.CELL_WIDTH)
-        if cols == self._cols and not force:
+    def visible_selected(self):
+        return [p for p in self.paths if p in self.selected]
+
+    def select_all(self, value=True):
+        if value:
+            self.selected.update(self.paths)
+        else:
+            self.selected.difference_update(self.paths)
+        self.redraw()
+        self.on_selection_change()
+
+    def set_colors(self, **colors):
+        self.colors.update(colors)
+        self.canvas.configure(bg=self.colors["canvas"])
+        self.redraw()
+
+    # --- rajzolás ----------------------------------------------------------
+    def _yview(self, *args):
+        self.canvas.yview(*args)
+        self.schedule_redraw()
+
+    def _layout(self, force=False):
+        cols = max(1, self.canvas.winfo_width() // self.CELL_W)
+        if cols != self.cols or force:
+            self.cols = cols
+            rows = (len(self.paths) + cols - 1) // cols
+            self.canvas.configure(scrollregion=(0, 0, cols * self.CELL_W, max(rows * self.CELL_H, 1)))
+        self.redraw()
+
+    def schedule_redraw(self):
+        if self._redraw_job is None:
+            self._redraw_job = self.after_idle(self.redraw)
+
+    def _visible_range(self):
+        top = self.canvas.canvasy(0)
+        height = self.canvas.winfo_height()
+        first = max(0, int(top // self.CELL_H)) * self.cols
+        last = min(len(self.paths), (int((top + height) // self.CELL_H) + 1) * self.cols)
+        return first, last
+
+    def redraw(self):
+        self._redraw_job = None
+        c, col = self.canvas, self.colors
+        c.delete("cell")
+        first, last = self._visible_range()
+        for i in range(first, last):
+            path = self.paths[i]
+            x0, y0 = (i % self.cols) * self.CELL_W, (i // self.cols) * self.CELL_H
+            tx, ty = x0 + self.THUMB_X, y0 + self.THUMB_Y
+            sel = path in self.selected
+            if sel:
+                c.create_rectangle(x0 + 3, y0 + 1, x0 + self.CELL_W - 3, y0 + self.CELL_H - 2,
+                                   fill=col["select_fill"], outline=col["select"], width=2, tags="cell")
+            photo = self.photos.get(path)
+            if photo is not None:
+                self.photos.move_to_end(path)
+                c.create_image(tx + 75, ty + 75, image=photo, tags="cell")
+            else:
+                c.create_rectangle(tx, ty, tx + 150, ty + 150, fill=col["thumb"], outline="", tags="cell")
+                self._request(path)
+            # Jelölőnégyzet és mappa jel a kép bal és jobb alsó sarkában
+            bx, by = tx + 4, ty + 128
+            c.create_rectangle(bx, by, bx + 18, by + 18, fill=col["select"] if sel else "white",
+                               outline=col["select"] if sel else "#6b7280", width=1, tags="cell")
+            if sel:
+                c.create_line(bx + 4, by + 9, bx + 8, by + 13, bx + 14, by + 5, fill="white", width=2,
+                              tags="cell")
+            c.create_text(tx + 140, ty + 137, text="📁", tags="cell")
+            c.create_text(x0 + self.CELL_W // 2, ty + 154, text=short_name(self.labels.get(path, path)),
+                          width=self.CELL_W - 14, anchor="n", fill=col["fg"], justify="center", tags="cell")
+
+    # --- bélyegképek -------------------------------------------------------
+    def _request(self, path):
+        if path in self.pending:
             return
-        self._cols = cols
-        for idx, widget in enumerate(self.inner_frame.winfo_children()):
-            widget.grid(row=idx // cols, column=idx % cols, padx=5, pady=5)
+        self.pending.add(path)
+        self.loader.add_task(path, partial(self.call_in_ui, self._thumb_ready, path))
+
+    def _thumb_ready(self, path, pil_image):
+        """Fő szálon fut (call_in_ui-n keresztül)."""
+        self.pending.discard(path)
+        if path not in self.labels:
+            return
+        self.photos[path] = ImageTk.PhotoImage(pil_image)
+        while len(self.photos) > self.MAX_PHOTOS:
+            self.photos.popitem(last=False)
+        first, last = self._visible_range()
+        if path in self.paths[first:last]:
+            self.schedule_redraw()
+
+    # --- egér --------------------------------------------------------------
+    def _hit(self, event):
+        """(index, cellán belüli x, y) vagy None."""
+        x, y = self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
+        col, row = int(x // self.CELL_W), int(y // self.CELL_H)
+        if col >= self.cols or x < 0 or y < 0:
+            return None
+        i = row * self.cols + col
+        if i >= len(self.paths):
+            return None
+        return i, x - col * self.CELL_W, y - row * self.CELL_H
+
+    def _on_click(self, event, extend=False):
+        hit = self._hit(event)
+        if hit is None:
+            return
+        i, cx, cy = hit
+        path = self.paths[i]
+        if 132 <= cx <= 160 and 128 <= cy <= 152 and not extend:
+            self.on_locate(path)
+            return
+        if extend and self.anchor in self.paths:
+            a = self.paths.index(self.anchor)
+            lo, hi = sorted((a, i))
+            self.selected.update(self.paths[lo:hi + 1])
+        else:
+            self.selected.symmetric_difference_update({path})
+            self.anchor = path
+        self.redraw()
+        self.on_selection_change()
+
+    def _on_double(self, event):
+        hit = self._hit(event)
+        if hit is None:
+            return
+        path = self.paths[hit[0]]
+        # A dupla kattintás első fele már átváltotta a kijelölést: visszaállítjuk
+        self.selected.symmetric_difference_update({path})
+        self.redraw()
+        self.on_selection_change()
+        self.on_open(path)
 
     def bind_mousewheel(self, widget):
         if IS_WINDOWS or IS_MAC:
@@ -1022,13 +1362,16 @@ class ScrollableCanvas(tk.Frame):
         except Exception:
             return
         if IS_WINDOWS:
-            self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            # Érintőpadon a delta 120-nál kisebb is lehet: legalább egy lépés legyen
+            step = -event.delta / 120
+            self.canvas.yview_scroll(int(step) or (-1 if event.delta > 0 else 1), "units")
         elif IS_MAC:
             self.canvas.yview_scroll(int(-1 * event.delta), "units")
         elif event.num == 4:
             self.canvas.yview_scroll(-1, "units")
         elif event.num == 5:
             self.canvas.yview_scroll(1, "units")
+        self.schedule_redraw()
 
 
 def _config_dir():
@@ -1109,6 +1452,9 @@ class ImageRenamerGUI(_BaseTk):
         self.style = ttk.Style(self)
         self._native_ttk_theme = self.style.theme_use()
         self._system_palette, self._system_widget_options = self._capture_system_look()
+        lb = tk.Listbox(self)
+        self._system_listbox = (lb.cget("background"), lb.cget("foreground"))
+        lb.destroy()
         self.appearance = DEFAULT_APPEARANCE
         self.colors = SYSTEM_COLORS
         self.appearance_var = tk.StringVar(value=self.settings.appearance)
@@ -1130,13 +1476,24 @@ class ImageRenamerGUI(_BaseTk):
         self.vlc_player = None
         self.video_window = None
 
-        self.scrollable_canvas = ScrollableCanvas(self)
+        self.async_loader = AsyncThumbnailLoader()
+        self.async_loader.start()
+        self.date_cache = DateCache()
+        self._index_generation = 0
+        self.filter_frame = tk.Frame(self)
+        self.grid_view = ThumbGrid(self, self.async_loader, self.call_in_ui, on_open=self.open_media,
+                                   on_locate=self.open_file_location, on_selection_change=self._update_counts)
         self.btn_frame = tk.Frame(self)
-        self.status_bar = tk.Label(self, text=self.t("ready"), bd=1, relief=tk.SUNKEN, anchor=tk.W)
+        status_frame = tk.Frame(self, bd=1, relief=tk.SUNKEN)
+        self.status_bar = tk.Label(status_frame, text=self.t("ready"), anchor=tk.W)
+        self.count_label = tk.Label(status_frame, text="", anchor=tk.E)
+        self.count_label.pack(side=tk.RIGHT, padx=4)
+        self.status_bar.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        self.scrollable_canvas.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        self.filter_frame.pack(side=tk.TOP, fill=tk.X, padx=4, pady=(4, 0))
+        self.grid_view.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self.btn_frame.pack(side=tk.BOTTOM, fill=tk.X)
-        self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+        status_frame.pack(side=tk.BOTTOM, fill=tk.X)
 
         self.icons = {key: self.load_icon(name) for key, name in {
             "folder": "folder.png", "rename": "rename.png", "refresh": "refresh.png",
@@ -1170,14 +1527,17 @@ class ImageRenamerGUI(_BaseTk):
             self.action_buttons.append(btn)
 
         self.files = []
+        self._build_filter_bar()
+        for seq in ("<Control-a>", "<Control-A>"):
+            self.bind_all(seq, self._on_select_all_key)
+        # A bélyegkép-gyorsítótár méretének korlátozása a háttérben
+        threading.Thread(target=ThumbnailGenerator.cache.prune, daemon=True).start()
         self.prev_suffixes = self.settings.recent_suffixes
         self.last_rename = []  # [(régi, új)] a visszavonáshoz
         self.last_created_folders = []  # a visszavonáskor törlendő, általunk létrehozott mappák
         self.busy = False
         self.running = True
         self.folder = ""
-        self.async_loader = AsyncThumbnailLoader()
-        self.async_loader.start()
 
         self.daysort_button = tk.Button(self.btn_frame, text=self.t("btn_daysort"), image=self.icons["folder"],
                                         compound="left", padx=4, command=self.sort_by_day)
@@ -1393,6 +1753,11 @@ class ImageRenamerGUI(_BaseTk):
         st.map("TCheckbutton", background=[("active", c["bg"])],
                indicatorbackground=[("pressed", c["button_active"]), ("selected", c["select_bg"])],
                indicatorforeground=[("selected", c["select_fg"])])
+        st.configure("TCombobox", fieldbackground=c["field"], foreground=c["fg"], background=c["button"],
+                     arrowcolor=c["fg"], lightcolor=c["field"], darkcolor=c["field"])
+        st.map("TCombobox", fieldbackground=[("readonly", c["field"])], foreground=[("readonly", c["fg"])],
+               selectbackground=[("readonly", c["field"])], selectforeground=[("readonly", c["fg"])],
+               background=[("active", c["button_active"])])
         st.configure("TEntry", fieldbackground=c["field"], foreground=c["fg"], insertcolor=c["fg"],
                      lightcolor=c["field"], darkcolor=c["field"])
         st.map("TEntry", bordercolor=[("focus", c["select_bg"])], lightcolor=[("focus", c["select_bg"])])
@@ -1431,13 +1796,17 @@ class ImageRenamerGUI(_BaseTk):
         self.tk.call("tk_setPalette", *args)
         self._apply_widget_options(options)
 
-        self.scrollable_canvas.canvas.configure(bg=colors["canvas"])
-        # "Rendszer" módban marad a régi kinézet (szürke rács a fehér vásznon)
-        inner_bg = palette["background"] if name == "system" else colors["canvas"]
-        self.scrollable_canvas.inner_frame.configure(bg=inner_bg)
-        for lbl in self.scrollable_canvas.thumb_labels:
-            if lbl.winfo_exists():
-                lbl.configure(bg=colors["thumb"])
+        # A legördülő lista (Combobox) klasszikus Tk Listbox: a színét az option adatbázis adja
+        if name == "system":
+            lb_bg, lb_fg = self._system_listbox
+        else:
+            lb_bg, lb_fg = colors["field"], colors["fg"]
+        self.option_add("*TCombobox*Listbox.background", lb_bg, 70)
+        self.option_add("*TCombobox*Listbox.foreground", lb_fg, 70)
+        fg = palette["foreground"]
+        select = colors.get("select_bg", "#2563eb")
+        self.grid_view.set_colors(canvas=colors["canvas"], thumb=colors["thumb"], fg=fg, select=select,
+                                  select_fill=_blend(self._rgb(select), self._rgb(colors["canvas"]), 0.22))
         self.appearance, self.colors = name, colors
         self.appearance_var.set(name)
         for w in self._walk(self):
@@ -1469,6 +1838,10 @@ class ImageRenamerGUI(_BaseTk):
                  "overrelief": "overRelief", "borderwidth": "borderWidth",
                  "highlightthickness": "highlightThickness", "highlightbackground": "highlightBackground",
                  "highlightcolor": "highlightColor", "selectcolor": "selectColor"}
+
+    def _rgb(self, color):
+        """Bármilyen Tk színnév (pl. "white", "SystemButtonFace") -> (r, g, b) 0-255."""
+        return tuple(v // 257 for v in self.winfo_rgb(color))
 
     @property
     def is_dark(self):
@@ -1542,56 +1915,107 @@ class ImageRenamerGUI(_BaseTk):
 
         self.run_in_background(work, self.update_gui)
 
-    def clear_gui(self):
-        self.async_loader.clear()
-        for widget in self.scrollable_canvas.inner_frame.winfo_children():
-            widget.destroy()
-        self.scrollable_canvas.check_vars.clear()
-        self.scrollable_canvas.thumb_labels.clear()
-        self.scrollable_canvas.canvas.yview_moveto(0)
-
     def update_gui(self, files):
-        self.clear_gui()
         self.files = files
-        inner_frame = self.scrollable_canvas.inner_frame
-
-        for path in files:
-            frame = tk.Frame(inner_frame, width=160, height=180)
-            frame.grid_propagate(False)
-
-            lbl = tk.Label(frame, bg=self.colors["thumb"])
-            lbl.place(x=0, y=0, width=150, height=150)
-            self.scrollable_canvas.thumb_labels.append(lbl)
-            self.async_loader.add_task(path, partial(self.call_in_ui, self._set_thumbnail, lbl))
-
-            var = tk.BooleanVar()
-            tk.Checkbutton(frame, variable=var).place(x=5, y=125)
-            self.scrollable_canvas.check_vars.append(var)
-
-            name = os.path.relpath(path, self.folder) if self.recursive_var.get() else os.path.basename(path)
-            tk.Label(frame, text=name, wraplength=140).place(x=5, y=150)
-
-            link_lbl = tk.Label(frame, text="📁", cursor="hand2")
-            link_lbl.place(x=120, y=125)
-            link_lbl.bind("<Button-1>", lambda e, p=path: self.open_file_location(p))
-
-            if is_video(path):
-                lbl.bind("<Double-Button-1>", lambda e, p=path: self.open_video_player(p))
-            else:
-                lbl.bind("<Double-Button-1>", lambda e, p=path: self.open_file(p))
-
+        recursive = self.recursive_var.get()
+        labels = {p: os.path.relpath(p, self.folder) if recursive else os.path.basename(p) for p in files}
+        self.grid_view.set_items(self.filtered(files), labels)
+        self._update_counts()
         self.set_status(self.t("loaded", n=len(files)))
-        self.scrollable_canvas.update_layout(force=True)
+        self._start_date_index(files)
 
-    def _set_thumbnail(self, label, pil_image):
-        """Fő szálon fut (call_in_ui-n keresztül)."""
-        if not label.winfo_exists():
+    # --- szűrés ------------------------------------------------------------
+    def _build_filter_bar(self):
+        f = self.filter_frame
+        self.filter_kind = tk.StringVar(value="all")
+        self.filter_text = tk.StringVar()
+        self.filter_from = tk.StringVar()
+        self.filter_to = tk.StringVar()
+        self.filter_file_dated = tk.BooleanVar(value=False)
+        kinds = {self.t("filter_" + k): k for k in FILTER_KINDS}
+        tk.Label(f, text=self.t("filter_kind")).pack(side=tk.LEFT)
+        combo = ttk.Combobox(f, state="readonly", width=8, values=list(kinds))
+        combo.set(self.t("filter_all"))
+        combo.bind("<<ComboboxSelected>>", lambda e: (self.filter_kind.set(kinds[combo.get()]), self.apply_filter()))
+        combo.pack(side=tk.LEFT, padx=(2, 10))
+        tk.Label(f, text=self.t("filter_search")).pack(side=tk.LEFT)
+        ttk.Entry(f, textvariable=self.filter_text, width=12).pack(side=tk.LEFT, padx=(2, 10))
+        tk.Label(f, text=self.t("filter_from")).pack(side=tk.LEFT)
+        ttk.Entry(f, textvariable=self.filter_from, width=10).pack(side=tk.LEFT, padx=2)
+        tk.Label(f, text=self.t("filter_to")).pack(side=tk.LEFT)
+        ttk.Entry(f, textvariable=self.filter_to, width=10).pack(side=tk.LEFT, padx=(2, 10))
+        ttk.Checkbutton(f, text=self.t("filter_file_dated"), variable=self.filter_file_dated,
+                        command=self.apply_filter).pack(side=tk.LEFT)
+        for var in (self.filter_text, self.filter_from, self.filter_to):
+            var.trace_add("write", lambda *a: self._schedule_filter())
+        self._filter_job = None
+
+    def _schedule_filter(self):
+        # Gépelés közben ne szűrjön minden leütésre
+        if self._filter_job:
+            self.after_cancel(self._filter_job)
+        self._filter_job = self.after(250, self.apply_filter)
+
+    def filtered(self, files):
+        try:
+            day_from, day_to = parse_day(self.filter_from.get()), parse_day(self.filter_to.get())
+        except ValueError:
+            day_from = day_to = None  # félig beírt dátum: addig nem szűr dátumra
+        return filter_paths(files, self.filter_kind.get(), self.filter_text.get(), day_from, day_to,
+                            self.filter_file_dated.get(), self.date_cache.peek)
+
+    def apply_filter(self):
+        self._filter_job = None
+        self.grid_view.show(self.filtered(self.files))
+        self._update_counts()
+
+    def filter_active(self):
+        return (self.filter_kind.get() != "all" or self.filter_text.get().strip() or self.filter_from.get().strip()
+                or self.filter_to.get().strip() or self.filter_file_dated.get())
+
+    def _update_counts(self):
+        shown, total = len(self.grid_view.paths), len(self.files)
+        text = self.t("count_selected", sel=len(self.grid_view.visible_selected()), shown=shown)
+        if shown != total:
+            text += self.t("count_filtered", total=total)
+        self.count_label.config(text=text)
+
+    def _start_date_index(self, files):
+        """A dátumok beolvasása a háttérben, hogy a dátumszűrő és az átnevezés gyors legyen."""
+        self._index_generation += 1
+        gen = self._index_generation
+
+        def work():
+            for i, path in enumerate(files, 1):
+                if gen != self._index_generation or not self.running:
+                    return
+                try:
+                    self.date_cache.get(path)
+                except OSError:
+                    continue
+                if i % 200 == 0:
+                    self.call_in_ui(self._on_dates_progress, gen)
+            self.call_in_ui(self._on_dates_progress, gen)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_dates_progress(self, gen):
+        # Fő szálon: a Tk változókat csak itt szabad olvasni
+        if gen == self._index_generation and self.filter_active():
+            self.apply_filter()
+
+    def _on_select_all_key(self, event):
+        if isinstance(event.widget, (tk.Entry, ttk.Entry)) or event.widget.winfo_toplevel() is not self:
             return
-        photo = ImageTk.PhotoImage(pil_image)
-        label.configure(image=photo)
-        label.image = photo
+        self.mark_all()
 
     # --- megnyitás / lejátszás ---------------------------------------------
+    def open_media(self, path):
+        if is_video(path):
+            self.open_video_player(path)
+        else:
+            self.open_file(path)
+
     def open_video_player(self, path):
         if self.vlc_instance is None:
             self.open_file(path)
@@ -1662,7 +2086,8 @@ class ImageRenamerGUI(_BaseTk):
 
     # --- átnevezés ---------------------------------------------------------
     def selected_paths(self):
-        return [self.files[i] for i, var in enumerate(self.scrollable_canvas.check_vars) if var.get()]
+        """A kijelölt és a szűrés szerint látható fájlok (az elrejtettekhez nem nyúlunk)."""
+        return self.grid_view.visible_selected()
 
     def rename_selected(self):
         """Átnevezés logika mozgatási opcióval"""
@@ -1684,7 +2109,7 @@ class ImageRenamerGUI(_BaseTk):
             items, file_dated = [], 0
             for i, path in enumerate(selected, 1):
                 self.call_in_ui(self.set_status, self.t("reading_dates", i=i, n=len(selected)))
-                dt, source = get_media_datetime(path)
+                dt, source = self.date_cache.get(path)
                 file_dated += source == "file"
                 items.append((path, dt))
 
@@ -1766,19 +2191,20 @@ class ImageRenamerGUI(_BaseTk):
             return
         selected = self.selected_paths()
         if not selected:
-            if not self.files:
+            shown = list(self.grid_view.paths)  # szűrésnél csak a láthatók
+            if not shown:
                 messagebox.showinfo(self.t("none_selected_title"), self.t("none_selected"))
                 return
-            if not messagebox.askyesno(self.t("btn_daysort"), self.t("daysort_all", n=len(self.files))):
+            if not messagebox.askyesno(self.t("btn_daysort"), self.t("daysort_all", n=len(shown))):
                 return
-            selected = list(self.files)
+            selected = shown
         base_folder = self.folder
 
         def work():
             items = []
             for i, path in enumerate(selected, 1):
                 self.call_in_ui(self.set_status, self.t("reading_dates", i=i, n=len(selected)))
-                dt, source = get_media_datetime(path)
+                dt, source = self.date_cache.get(path)
                 items.append((path, dt, source))
             return items
 
@@ -1936,12 +2362,10 @@ class ImageRenamerGUI(_BaseTk):
         return result["suffix"], result["move"]
 
     def unmark_all(self):
-        for var in self.scrollable_canvas.check_vars:
-            var.set(False)
+        self.grid_view.select_all(False)
 
     def mark_all(self):
-        for var in self.scrollable_canvas.check_vars:
-            var.set(True)
+        self.grid_view.select_all(True)
 
     # --- törlés ------------------------------------------------------------
     def delete_selected(self):
