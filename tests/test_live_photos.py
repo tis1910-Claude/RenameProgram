@@ -3,7 +3,7 @@ import os
 from datetime import datetime
 
 import Keprename5video as m
-from conftest import make_jpg, pump
+from conftest import accept_dialog, make_jpg, pump
 
 
 def test_find_live_pairs():
@@ -55,8 +55,7 @@ def test_gui_rename_and_undo_pair(app, tmp_path, monkeypatch):
     assert app.grid_view.live == {str(folder / "IMG_7.JPG")}
     app.grid_view.selected = {str(folder / "IMG_7.JPG")}  # csak a fotó kijelölve
     monkeypatch.setattr(app, "get_suffix", lambda: ("Balaton", False))
-    app.after(800, lambda: [w for w in app.winfo_children() if isinstance(w, m.tk.Toplevel)][-1]
-              .event_generate("<Return>"))
+    accept_dialog(app)
     app.rename_selected()
     pump(app, 1.5)
     assert sorted(os.listdir(folder)) == ["2023-07-15_10-00-00_Balaton.JPG", "2023-07-15_10-00-00_Balaton.MOV"]
