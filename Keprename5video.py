@@ -196,6 +196,14 @@ TEXTS = {
         "filter_file_dated": "Csak metaadat nélkül",
         "count_selected": "{sel} kijelölve / {shown} látható",
         "count_filtered": " (összesen {total})",
+        "shift_label": "Időeltolás:",
+        "shift_hint": "pl. +1 (óra), -0:30, +1d 2:00 — ha a fényképező órája rosszul járt; a fájlt nem módosítja",
+        "shift_invalid": "Érvénytelen eltolás. Példák: +1, -0:30, +1d 2:00",
+        "rename_preview_title": "Átnevezés - előnézet",
+        "rename_preview_summary": "{n} fájl kap új nevet, {unchanged} neve már megfelelő.",
+        "col_old": "Jelenlegi név",
+        "col_date": "Felvétel ideje",
+        "unchanged_mark": "(változatlan)",
         "btn_daysort": "Rendezés napok szerint",
         "daysort_all": "Nincs kijelölt fájl. Rendezed mind a {n} betöltött fájlt?",
         "daysort_title": "Rendezés napok szerint - előnézet",
@@ -294,6 +302,14 @@ TEXTS = {
         "filter_file_dated": "No metadata only",
         "count_selected": "{sel} selected / {shown} shown",
         "count_filtered": " (total {total})",
+        "shift_label": "Time shift:",
+        "shift_hint": "e.g. +1 (hour), -0:30, +1d 2:00 — if the camera clock was wrong; files are not modified",
+        "shift_invalid": "Invalid shift. Examples: +1, -0:30, +1d 2:00",
+        "rename_preview_title": "Rename - preview",
+        "rename_preview_summary": "{n} files get a new name, {unchanged} already have the right name.",
+        "col_old": "Current name",
+        "col_date": "Capture time",
+        "unchanged_mark": "(unchanged)",
         "btn_daysort": "Sort by day",
         "daysort_all": "No files selected. Sort all {n} loaded files?",
         "daysort_title": "Sort by day - preview",
@@ -777,6 +793,27 @@ def execute_plan(plan, progress=None):
         except Exception as e:
             errors.append(f"{os.path.basename(old)}: {e}")
     return done, unchanged, errors
+
+
+_SHIFT_RE = re.compile(r"^\s*([+-])?\s*(?:(\d+)\s*[dn]\s*)?(?:(\d+)(?::(\d{1,2}))?)?\s*$", re.IGNORECASE)
+
+
+def parse_shift(text):
+    """Időeltolás: '+1', '-0:30', '+1d 2:00' (d/n = nap), üres = 0. Hibás alakra ValueError."""
+    match = _SHIFT_RE.match(text or "")
+    if not match:
+        raise ValueError(text)
+    sign, days, hours, minutes = match.groups()
+    if minutes and int(minutes) >= 60:
+        raise ValueError(text)
+    delta = timedelta(days=int(days or 0), hours=int(hours or 0), minutes=int(minutes or 0))
+    return -delta if sign == "-" else delta
+
+
+def move_target_folder(base_folder, items, suffix):
+    """A közös célmappa: a legkorábbi felvétel napja + téma (nem a kijelölés első eleme)."""
+    first_day = min(dt for _, dt in items).strftime("%Y-%m-%d")
+    return os.path.join(base_folder, f"{first_day}_{sanitize_component(suffix)}")
 
 
 def scan_media(folder, recursive=True):
@@ -2090,7 +2127,7 @@ class ImageRenamerGUI(_BaseTk):
         return self.grid_view.visible_selected()
 
     def rename_selected(self):
-        """Átnevezés logika mozgatási opcióval"""
+        """Átnevezés: téma választása, dátumok olvasása, előnézet (időeltolással), végrehajtás."""
         if self.busy:
             self.show_info(self.t("info"), self.t("busy"))
             return
@@ -2103,27 +2140,135 @@ class ImageRenamerGUI(_BaseTk):
         if not suffix:
             return
         pattern, base_folder = self.settings.pattern, self.folder
-        self.close_video_player()  # Windowson a lejátszott fájl nem nevezhető át
 
         def work():
-            items, file_dated = [], 0
+            items = []
             for i, path in enumerate(selected, 1):
                 self.call_in_ui(self.set_status, self.t("reading_dates", i=i, n=len(selected)))
                 dt, source = self.date_cache.get(path)
-                file_dated += source == "file"
-                items.append((path, dt))
+                items.append((path, dt, source))
+            return items
 
-            target_folder = None
-            if move_files:
-                # A legkorábbi felvétel napja adja a mappa nevét (nem a kijelölés első eleme)
-                first_day = min(dt for _, dt in items).strftime("%Y-%m-%d")
-                target_folder = os.path.join(base_folder, f"{first_day}_{sanitize_component(suffix)}")
+        self.run_in_background(work, lambda items: self.after(
+            0, self._rename_preview, items, suffix, move_files, pattern, base_folder))
+
+    def _add_shift_row(self, win, on_change):
+        """Időeltolás mező az előnézetekhez. Vissza: függvény, ami a timedelta-t adja (hibánál None)."""
+        row = tk.Frame(win)
+        row.pack(fill=tk.X, padx=10, pady=4)
+        tk.Label(row, text=self.t("shift_label")).pack(side=tk.LEFT)
+        var = tk.StringVar()
+        ttk.Entry(row, textvariable=var, width=10).pack(side=tk.LEFT, padx=4)
+        hint = tk.Label(row, text=self.t("shift_hint"), anchor="w")
+        hint.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        normal_fg, job = hint.cget("foreground"), {}
+
+        def value():
+            try:
+                return parse_shift(var.get())
+            except ValueError:
+                return None
+
+        def changed(*_):
+            ok = value() is not None
+            hint.config(text=self.t("shift_hint" if ok else "shift_invalid"),
+                        foreground=normal_fg if ok else self.colors["warn"])
+            if job.get("id"):
+                win.after_cancel(job["id"])
+            job["id"] = win.after(300, on_change)
+
+        var.trace_add("write", changed)
+        return value
+
+    def _preview_tree(self, win, columns):
+        frame = tk.Frame(win)
+        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=4)
+        tree = ttk.Treeview(frame, columns=[c for c, _, _ in columns[1:]], show="tree headings")
+        for col, text, width in columns:
+            tree.heading(col, text=text)
+            tree.column(col, width=width, stretch=col != "#0")
+        scroll = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=scroll.set)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        return tree
+
+    def _preview_buttons(self, win, accept):
+        bottom = tk.Frame(win)
+        bottom.pack(pady=10)
+        ok_btn = ttk.Button(bottom, text=self.t("ok"), command=accept)
+        ok_btn.pack(side=tk.LEFT, padx=4)
+        ttk.Button(bottom, text=self.t("cancel"), command=win.destroy).pack(side=tk.LEFT, padx=4)
+        win.bind("<Return>", lambda e: accept())
+        win.bind("<Escape>", lambda e: win.destroy())
+        return ok_btn
+
+    def _rename_preview(self, items, suffix, move_files, pattern, base_folder):
+        self.set_status(self.t("ready"))
+        file_dated = {path for path, _, source in items if source == "file"}
+        state, result = {}, {"ok": False}
+
+        win = tk.Toplevel(self)
+        win.title(self.t("rename_preview_title"))
+        win.transient(self)
+        win.geometry("860x520")
+        summary = tk.Label(win, justify=tk.LEFT, anchor="w", wraplength=820)
+        summary.pack(fill=tk.X, padx=10, pady=(10, 4))
+        if file_dated:
+            tk.Label(win, text=self.t("daysort_file_dates", n=len(file_dated)), justify=tk.LEFT,
+                     anchor="w", wraplength=820, fg=self.colors["warn"]).pack(fill=tk.X, padx=10)
+        shift = self._add_shift_row(win, lambda: refresh())
+        tree = self._preview_tree(win, [("#0", self.t("col_old"), 260), ("date", self.t("col_date"), 160),
+                                        ("new", self.t("daysort_col_new"), 360)])
+
+        def accept():
+            if state.get("plan"):
+                result["ok"] = True
+                win.destroy()
+
+        ok_btn = self._preview_buttons(win, accept)
+
+        def refresh():
+            delta = shift()
+            if delta is None:
+                ok_btn.state(["disabled"])
+                return
+            shifted = [(p, dt + delta) for p, dt, _ in items]
+            target = move_target_folder(base_folder, shifted, suffix) if move_files else None
+            plan = plan_renames(shifted, suffix, pattern, target)
+            dates = dict(shifted)
+            state.update(plan=plan, target=target)
+            tree.delete(*tree.get_children())
+            unchanged = 0
+            for old, new in plan:
+                same = old == new
+                unchanged += same
+                mark = " *" if old in file_dated else ""
+                tree.insert("", tk.END, text=os.path.relpath(old, base_folder),
+                            values=(dates[old].strftime("%Y-%m-%d %H:%M:%S") + mark,
+                                    self.t("unchanged_mark") if same else
+                                    (os.path.relpath(new, base_folder) if target else os.path.basename(new))))
+            text = self.t("rename_preview_summary", n=len(plan) - unchanged, unchanged=unchanged)
+            if target:
+                text += "\n" + self.t("moved_to", folder=target).strip()
+            summary.config(text=text)
+            ok_btn.state(["!disabled"] if len(plan) > unchanged else ["disabled"])
+
+        refresh()
+        win.focus_set()
+        win.grab_set()
+        self.wait_window(win)
+        if result["ok"]:
+            self._rename_run(state["plan"], state["target"], len(file_dated))
+
+    def _rename_run(self, plan, target_folder, file_dated):
+        self.close_video_player()  # Windowson a lejátszott fájl nem nevezhető át
+
+        def work():
+            created = False
+            if target_folder:
                 created = not os.path.isdir(target_folder)
                 os.makedirs(target_folder, exist_ok=True)
-            else:
-                created = False
-
-            plan = plan_renames(items, suffix, pattern, target_folder)
             done, unchanged, errors = execute_plan(
                 plan, lambda i, n: self.call_in_ui(self.set_status, self.t("renaming", i=i, n=n)))
             if created and not done:
@@ -2229,6 +2374,7 @@ class ImageRenamerGUI(_BaseTk):
                      anchor="w", wraplength=720, fg=self.colors["warn"]).pack(fill=tk.X, padx=10)
             ttk.Checkbutton(win, text=self.t("daysort_include_file"), variable=include_var,
                             command=lambda: refresh()).pack(anchor="w", padx=10, pady=4)
+        shift = self._add_shift_row(win, lambda: refresh())
 
         tree_frame = tk.Frame(win)
         tree_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=4)
@@ -2251,7 +2397,11 @@ class ImageRenamerGUI(_BaseTk):
         state = {}
 
         def refresh():
-            chosen = [(p, dt) for p, dt in dates.items() if include_var.get() or p not in file_dated]
+            delta = shift()
+            if delta is None:
+                ok_btn.state(["disabled"])
+                return
+            chosen = [(p, dt + delta) for p, dt in dates.items() if include_var.get() or p not in file_dated]
             plan, in_place = plan_day_sort(chosen, base_folder)
             state["plan"] = plan
             tree.delete(*tree.get_children())

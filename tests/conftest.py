@@ -46,3 +46,27 @@ def _thumb_cache_in_tmp(tmp_path_factory, monkeypatch):
     """A tesztek ne a felhasználó valódi bélyegkép-gyorsítótárába írjanak."""
     import Keprename5video as m
     monkeypatch.setattr(m.ThumbnailGenerator, "cache", m.ThumbnailCache(str(tmp_path_factory.mktemp("thumbs"))))
+
+
+@pytest.fixture
+def app(tmp_path, monkeypatch):
+    """A teljes GUI, ideiglenes beállításokkal; kijelző nélkül a teszt kimarad."""
+    import tkinter as tk
+    import Keprename5video as m
+    monkeypatch.setattr(m, "_config_dir", lambda: str(tmp_path / "cfg"))
+    try:
+        gui = m.ImageRenamerGUI()
+    except tk.TclError as e:
+        pytest.skip(f"nincs kijelző: {e}")
+    gui.geometry("1000x700")
+    yield gui
+    gui.on_close()
+
+
+def pump(app, seconds):
+    """A Tk eseményhurok futtatása adott ideig (a háttérszálak eredményei így érkeznek meg)."""
+    import time
+    end = time.time() + seconds
+    while time.time() < end:
+        app.update()
+        time.sleep(0.02)

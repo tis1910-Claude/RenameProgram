@@ -8,7 +8,7 @@ import pytest
 from PIL import Image
 
 import Keprename5video as m
-from conftest import make_jpg
+from conftest import make_jpg, pump as _pump
 
 
 def test_parse_day():
@@ -79,27 +79,6 @@ def test_short_name():
     assert m.short_name("rovid.jpg") == "rovid.jpg"
     s = m.short_name("nagyon_hosszu_fajlnev_ami_nem_fer_ki_a_cellaba_2024.jpg")
     assert len(s) == 40 and s.endswith("2024.jpg") and "…" in s
-
-
-@pytest.fixture
-def app(tmp_path, monkeypatch):
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
-    monkeypatch.setenv("APPDATA", str(tmp_path / "cfg"))
-    monkeypatch.setattr(m, "_config_dir", lambda: str(tmp_path / "cfg"))
-    try:
-        gui = m.ImageRenamerGUI()
-    except tk.TclError as e:
-        pytest.skip(f"nincs kijelző: {e}")
-    gui.geometry("1000x700")
-    yield gui
-    gui.on_close()
-
-
-def _pump(app, seconds):
-    end = time.time() + seconds
-    while time.time() < end:
-        app.update()
-        time.sleep(0.02)
 
 
 def test_grid_click_select_and_filter(app, tmp_path):
