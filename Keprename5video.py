@@ -220,6 +220,7 @@ TEXTS = {
         "col_old": "Jelenlegi név",
         "col_date": "Felvétel ideje",
         "unchanged_mark": "(változatlan)",
+        "from_name": " (névből)",
         "btn_daysort": "Rendezés napok szerint",
         "daysort_all": "Nincs kijelölt fájl. Rendezed mind a {n} betöltött fájlt?",
         "daysort_title": "Rendezés napok szerint - előnézet",
@@ -342,6 +343,7 @@ TEXTS = {
         "col_old": "Current name",
         "col_date": "Capture time",
         "unchanged_mark": "(unchanged)",
+        "from_name": " (from name)",
         "btn_daysort": "Sort by day",
         "daysort_all": "No files selected. Sort all {n} loaded files?",
         "daysort_title": "Sort by day - preview",
@@ -697,8 +699,51 @@ def get_file_datetime(path):
     return datetime.fromtimestamp(min(candidates))
 
 
+# Dátum a fájlnévből, ha nincs beágyazott dátum (WhatsApp, Messenger, képernyőképek, Android).
+# (minta, időzóna): "local" = a név helyi időt tartalmaz, "utc" = UTC-t (Pixel), "epoch_ms" = Unix-idő ms-ban.
+_D = r"(?P<y>(?:19|20)\d\d)"
+_FILENAME_PATTERNS = [
+    # Facebook/Messenger letöltés: FB_IMG_1691843415123.jpg (Unix-idő ezredmásodpercben)
+    (re.compile(r"^FB_IMG_(?P<ms>\d{13})"), "epoch_ms"),
+    # Google Pixel: PXL_20230812_143015123.jpg (UTC)
+    (re.compile(r"^PXL_" + _D + r"(?P<m>\d\d)(?P<d>\d\d)_(?P<H>\d\d)(?P<M>\d\d)(?P<S>\d\d)"), "utc"),
+    # WhatsApp: IMG-20230812-WA0001.jpg, VID-20230812-WA0003.mp4 (csak nap)
+    (re.compile(r"^(?:IMG|VID|AUD|PTT|STK|DOC)-" + _D + r"(?P<m>\d\d)(?P<d>\d\d)-WA\d+"), "local"),
+    # Elválasztott dátum + idő: 2023-08-12 14.30.15, 2023-08-12_14-30-15, Screenshot 2023-08-12 at 14.30.15,
+    # Képernyőkép 2023-08-12 143015, signal-2023-08-12-143015, Screenshot_2023-08-12-14-30-15-123_...
+    (re.compile(r"(?<!\d)" + _D + r"[-_.](?P<m>\d\d)[-_.](?P<d>\d\d)(?:[ _T-]+(?:at[ _])?(?P<H>\d\d)[-_.:h]?"
+                r"(?P<M>\d\d)[-_.:m]?(?P<S>\d\d))?(?!\d)"), "local"),
+    # Tömör dátum + idő: IMG_20230812_143015.jpg, 20230812_143015.jpg, Screenshot_20230812-143015.png
+    (re.compile(r"(?<!\d)" + _D + r"(?P<m>\d\d)(?P<d>\d\d)[_-](?P<H>\d\d)(?P<M>\d\d)(?P<S>\d\d)(?!\d)"), "local"),
+]
+
+
+def get_filename_datetime(path, now=None):
+    """A fájlnévben lévő felvételi dátum, vagy None. Csak ismert, egyértelmű alakokat fogad el."""
+    name = os.path.splitext(os.path.basename(path))[0]
+    latest = (now or datetime.now()) + timedelta(days=1)
+    for pattern, kind in _FILENAME_PATTERNS:
+        match = pattern.search(name)
+        if not match:
+            continue
+        g = match.groupdict()
+        try:
+            if kind == "epoch_ms":
+                dt = datetime.fromtimestamp(int(g["ms"]) / 1000)
+            else:
+                dt = datetime(int(g["y"]), int(g["m"]), int(g["d"]),
+                              int(g.get("H") or 0), int(g.get("M") or 0), int(g.get("S") or 0))
+                if kind == "utc":
+                    dt = dt.replace(tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
+        except (ValueError, OverflowError, OSError):
+            continue  # pl. 2023-13-45: nem dátum, a többi mintát még megpróbáljuk
+        if datetime(1990, 1, 1) <= dt <= latest:
+            return dt
+    return None
+
+
 def get_media_datetime(path):
-    """(datetime, forrás) ahol forrás: 'exif' | 'video' | 'file'. Mindig ad dátumot."""
+    """(datetime, forrás) ahol forrás: 'exif' | 'video' | 'filename' | 'file'. Mindig ad dátumot."""
     if is_video(path):
         dt = get_video_datetime(path)
         if dt:
@@ -707,6 +752,9 @@ def get_media_datetime(path):
         dt = get_exif_datetime(path)
         if dt:
             return dt, "exif"
+    dt = get_filename_datetime(path)
+    if dt:
+        return dt, "filename"
     return get_file_datetime(path), "file"
 
 
@@ -2366,6 +2414,7 @@ class ImageRenamerGUI(_BaseTk):
     def _rename_preview(self, items, suffix, move_files, pattern, base_folder):
         self.set_status(self.t("ready"))
         file_dated = {path for path, _, source in items if source == "file"}
+        name_dated = {path for path, _, source in items if source == "filename"}
         state, result = {}, {"ok": False}
 
         win = tk.Toplevel(self)
@@ -2403,7 +2452,7 @@ class ImageRenamerGUI(_BaseTk):
             for old, new in plan:
                 same = old == new
                 unchanged += same
-                mark = " *" if old in file_dated else ""
+                mark = " *" if old in file_dated else self.t("from_name") if old in name_dated else ""
                 tree.insert("", tk.END, text=os.path.relpath(old, base_folder),
                             values=(dates[old].strftime("%Y-%m-%d %H:%M:%S") + mark,
                                     self.t("unchanged_mark") if same else
@@ -2523,6 +2572,7 @@ class ImageRenamerGUI(_BaseTk):
     def _daysort_preview(self, base_folder, items):
         self.set_status(self.t("ready"))
         file_dated = {path for path, _, source in items if source == "file"}
+        name_dated = {path for path, _, source in items if source == "filename"}
         dates = {path: dt for path, dt, _ in items}
         include_var = tk.BooleanVar(value=True)
         result = {"ok": False}
@@ -2575,7 +2625,7 @@ class ImageRenamerGUI(_BaseTk):
                 if folder not in days:
                     label = os.path.basename(folder) + ("" if os.path.isdir(folder) else " (+)")
                     days[folder] = tree.insert("", tk.END, text=label, open=len(plan) <= 200)
-                mark = " *" if old in file_dated else ""
+                mark = " *" if old in file_dated else self.t("from_name") if old in name_dated else ""
                 tree.insert(days[folder], tk.END, values=(os.path.relpath(old, base_folder) + mark,
                                                           os.path.basename(new)))
             new_folders = sum(1 for f in days if not os.path.isdir(f))
