@@ -34,6 +34,9 @@ Példa: `IMG_1234.jpg` → `2024-05-01_14-30-00_Balaton.jpg`
 - **Időeltolás** az előnézetben (átnevezésnél és napok szerinti rendezésnél is): ha a fényképező órája rosszul
   járt, pl. `+1`, `-0:30` vagy `+1d 2:00` beírásával a kijelölt fájlok ideje eltolódik. A fájlok tartalmát
   (EXIF) a program nem módosítja, csak a név és a napi mappa igazodik hozzá.
+- **Live Photo párok** (iPhone: `IMG_1234.HEIC` + `IMG_1234.MOV`, azonos mappában, azonos névvel): a rácsban
+  „LIVE” jelzést kapnak, és átnevezéskor, napi rendezéskor, törléskor és visszavonáskor együtt mozognak, akkor is,
+  ha csak az egyik van kijelölve. A videó a fotóval azonos nevet és napot kap (csak a kiterjesztés más).
 - Ütközésvédelem: létező fájlt soha nem ír felül
 - **Rendezés napok szerint**: a kijelölt (vagy kijelölés nélkül az összes betöltött) fájlt a felvétel napja
   szerinti `ÉÉÉÉ-HH-NN` almappába helyezi át, a fájlnév megmarad. Előnézetet mutat (napokra bontva, az új
