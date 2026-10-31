@@ -1703,6 +1703,12 @@ class ImageRenamerGUI(_BaseTk):
                                         compound="left", padx=4, command=self.sort_by_day)
         self.daysort_button.pack(side=tk.LEFT, padx=2)
         self.action_buttons.append(self.daysort_button)
+        # Keskeny ablakban a gombok új sorba törnek, egyik sem csúszik ki (a Törlés és Kilépés a végére kerül)
+        self._flow_order = self.action_buttons[1:] + [self.delete_button, self.exit_button]
+        for btn in self._flow_order:
+            btn.pack_forget()
+        self.btn_frame.bind("<Configure>", lambda e: self._flow_buttons())
+        self._flow_buttons()
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         if HAS_DND:
@@ -1752,6 +1758,24 @@ class ImageRenamerGUI(_BaseTk):
 
     def set_status(self, text):
         self.status_bar.config(text=text)
+
+    def _flow_buttons(self):
+        """Az alsó gombsor tördelése az ablak szélességéhez (sorfolytonos elrendezés)."""
+        width = self.btn_frame.winfo_width()
+        if width <= 1:
+            width = self.winfo_width() if self.winfo_width() > 1 else 1000
+        x = y = row_h = 0
+        pad = 2
+        for btn in self._flow_order:
+            w, h = btn.winfo_reqwidth(), btn.winfo_reqheight()
+            if x and x + w > width:
+                x, y, row_h = 0, y + row_h + pad, 0
+            btn.place(x=x + pad, y=y + pad)
+            x += w + 2 * pad
+            row_h = max(row_h, h)
+        height = y + row_h + 2 * pad
+        if int(self.btn_frame.cget("height")) != height:
+            self.btn_frame.configure(height=height)
 
     def set_busy(self, busy):
         self.busy = busy
