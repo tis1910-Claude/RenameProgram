@@ -38,7 +38,10 @@ Példa: `IMG_1234.jpg` → `2024-05-01_14-30-00_Balaton.jpg`
   mappák `(+)` jellel), az *Almappák is* beállítás szerint az almappákban lévő fájlokat is rendezi, a
   metaadat nélküli fájlokat a fájl dátuma szerint rendezi (ez kikapcsolható),
   és névütközéskor `_1`, `_2` végződést ad. Visszavonható (Ctrl+Z); az általa létrehozott üres mappákat ilyenkor törli.
-- Utolsó átnevezés vagy rendezés visszavonása (*Szerkesztés → Visszavonás*, Ctrl+Z)
+- Visszavonás több lépésben (*Szerkesztés → Visszavonás*, Ctrl+Z): az utolsó 20 átnevezés/rendezés
+  visszavonható, a program újraindítása után is (`history.json` a beállítások mellett). A menü mutatja, mi lenne visszavonva.
+- **Duplikátumkeresés** (*Szerkesztés → Duplikátumok keresése*): azonos tartalmú fájlok a kijelöltek (vagy a látható
+  fájlok) között. A másolatokat egy gombnyomással kijelöli, a törlés a Törlés gombbal, lomtárba történik.
 - Törlés lomtárba (`send2trash`), almappák be-/kikapcsolása, mappa behúzása az ablakba
 - Beépített VLC-lejátszó (ha nincs VLC, a rendszer alapértelmezett lejátszója nyílik meg)
 - Magyar és angol felület

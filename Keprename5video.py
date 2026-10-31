@@ -172,7 +172,23 @@ TEXTS = {
         "error": "Hiba",
         "info": "Info",
         "undo_none": "Nincs visszavonható művelet.",
-        "undo_confirm": "Visszavonod az utolsó átnevezést/áthelyezést ({n} fájl)?",
+        "undo_confirm": ("Visszavonod ezt a lépést?\n\n{what}, {time}, {n} fájl\n\n"
+                         "Utána még {left} korábbi lépés vonható vissza."),
+        "undo_menu": "Visszavonás: {what} ({n} fájl, {time})",
+        "history_rename": "Átnevezés",
+        "history_daysort": "Rendezés napok szerint",
+        "menu_duplicates": "Duplikátumok keresése",
+        "dup_title": "Duplikátumok",
+        "dup_progress": "Duplikátumok keresése... {i}/{n}",
+        "dup_none": "Nincs azonos tartalmú fájl.",
+        "dup_summary": ("{g} csoportban {n} fölösleges másolat ({mb:.1f} MB). Csoportonként a legfelső mappában "
+                        "lévő fájl a megtartandó. A „Másolatok kijelölése” csak kijelöl, a törlés a Törlés gombbal történik."),
+        "dup_col_file": "Fájl",
+        "dup_group": "{i}. csoport ({n} fájl)",
+        "dup_keep": "megtartandó",
+        "dup_copy": "másolat",
+        "dup_select": "Másolatok kijelölése",
+        "dup_selected": "{n} másolat kijelölve. Ellenőrizd, majd a Törlés gombbal a lomtárba teheted őket.",
         "undo_done": "{n} fájl visszaállítva.",
         "delete_confirm_title": "Törlés megerősítése",
         "delete_confirm_trash": "Biztosan a lomtárba helyezed a {n} kijelölt fájlt?",
@@ -218,7 +234,7 @@ TEXTS = {
         "daysort_nothing": "Nincs áthelyezendő fájl: mind a megfelelő napi mappában van.",
         "daysort_moving": "Áthelyezés... {i}/{n}",
         "daysort_done": "{n} fájl áthelyezve {d} napi mappába.",
-        "daysort_undo_hint": "Visszavonás: Szerkesztés → Visszavonás (Ctrl+Z).",
+        "daysort_undo_hint": "Visszavonás: Szerkesztés → Visszavonás (Ctrl+Z), a program újraindítása után is.",
         "daysort_errors": "{n} fájl nem helyezhető át:\n",
     },
     "en": {
@@ -278,7 +294,23 @@ TEXTS = {
         "error": "Error",
         "info": "Info",
         "undo_none": "Nothing to undo.",
-        "undo_confirm": "Undo the last rename/move ({n} files)?",
+        "undo_confirm": ("Undo this step?\n\n{what}, {time}, {n} files\n\n"
+                         "{left} earlier steps can still be undone after this."),
+        "undo_menu": "Undo: {what} ({n} files, {time})",
+        "history_rename": "Rename",
+        "history_daysort": "Sort by day",
+        "menu_duplicates": "Find duplicates",
+        "dup_title": "Duplicates",
+        "dup_progress": "Finding duplicates... {i}/{n}",
+        "dup_none": "No files with identical content.",
+        "dup_summary": ("{n} redundant copies in {g} groups ({mb:.1f} MB). In each group the file in the topmost "
+                        "folder is kept. \"Select copies\" only selects them; delete them with the Delete button."),
+        "dup_col_file": "File",
+        "dup_group": "Group {i} ({n} files)",
+        "dup_keep": "keep",
+        "dup_copy": "copy",
+        "dup_select": "Select copies",
+        "dup_selected": "{n} copies selected. Check them, then move them to the recycle bin with Delete.",
         "undo_done": "{n} files restored.",
         "delete_confirm_title": "Confirm delete",
         "delete_confirm_trash": "Move the {n} selected files to the recycle bin?",
@@ -324,7 +356,7 @@ TEXTS = {
         "daysort_nothing": "Nothing to move: all files are already in the right day folder.",
         "daysort_moving": "Moving... {i}/{n}",
         "daysort_done": "{n} files moved into {d} day folders.",
-        "daysort_undo_hint": "Undo: Edit → Undo (Ctrl+Z).",
+        "daysort_undo_hint": "Undo: Edit → Undo (Ctrl+Z), even after restarting the program.",
         "daysort_errors": "{n} files could not be moved:\n",
     },
 }
@@ -956,6 +988,98 @@ def remove_empty_folders(folders):
 
 
 # ---------------------------------------------------------------------------
+# Visszavonási előzmények és duplikátumok (GUI-független)
+# ---------------------------------------------------------------------------
+class UndoHistory:
+    """Több lépésben visszavonható átnevezések/áthelyezések, fájlba mentve, így a program
+    újraindítása után is visszavonhatók. Mindig a legutóbbi lépés vonható vissza (LIFO)."""
+    MAX_STEPS = 20
+
+    def __init__(self, path):
+        self.path = path
+        self.steps = []
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            self.steps = [s for s in data.get("steps", []) if isinstance(s, dict) and s.get("moves")]
+        except (OSError, ValueError, AttributeError):
+            self.steps = []
+
+    def save(self):
+        try:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            tmp = self.path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"version": 1, "steps": self.steps}, f, ensure_ascii=False, indent=1)
+            os.replace(tmp, self.path)
+        except OSError as e:
+            print(f"Előzmények mentési hiba: {e}")
+
+    def push(self, kind, moves, created=(), when=None):
+        if not moves:
+            return
+        self.steps.append({"kind": kind, "time": (when or datetime.now()).strftime("%Y-%m-%d %H:%M"),
+                           "moves": [list(m) for m in moves], "created": list(created)})
+        del self.steps[:-self.MAX_STEPS]
+        self.save()
+
+    def last(self):
+        return self.steps[-1] if self.steps else None
+
+    def pop(self):
+        step = self.steps.pop() if self.steps else None
+        self.save()
+        return step
+
+    def __len__(self):
+        return len(self.steps)
+
+
+def _file_digest(path, limit=None, chunk=1024 * 1024):
+    h = hashlib.sha1()
+    read = 0
+    with open(path, "rb") as f:
+        while limit is None or read < limit:
+            block = f.read(chunk if limit is None else min(chunk, limit - read))
+            if not block:
+                break
+            h.update(block)
+            read += len(block)
+    return h.hexdigest()
+
+
+def find_duplicates(paths, progress=None):
+    """Azonos tartalmú fájlok csoportjai: méret -> első 64 kB -> teljes SHA-1 szerint szűkítve,
+    így a legtöbb fájlt nem kell végigolvasni. Minden csoport első eleme a „megtartandó”:
+    a legrövidebb útvonalú (a legfelső mappában lévő), azon belül ábécé szerint az első."""
+    by_size = {}
+    for p in paths:
+        try:
+            by_size.setdefault(os.path.getsize(p), []).append(p)
+        except OSError:
+            continue
+    candidates = [g for size, g in by_size.items() if len(g) > 1 and size > 0]
+    groups = []
+    for i, group in enumerate(candidates, 1):
+        for stage in (64 * 1024, None):  # előbb csak a fájl eleje, aztán a teljes tartalom
+            buckets = {}
+            for p in group:
+                try:
+                    buckets.setdefault(_file_digest(p, stage), []).append(p)
+                except OSError:
+                    continue
+            group = [p for b in buckets.values() if len(b) > 1 for p in b]
+            if not group:
+                break
+        else:
+            groups += [b for b in buckets.values() if len(b) > 1]
+        if progress:
+            progress(i, len(candidates))
+    keep_first = lambda p: (p.count(os.sep), len(p), p.casefold())
+    return sorted((sorted(g, key=keep_first) for g in groups), key=lambda g: keep_first(g[0]))
+
+
+# ---------------------------------------------------------------------------
 # Bélyegképek (háttérszálban csak PIL kép készül, PhotoImage a fő szálon)
 # ---------------------------------------------------------------------------
 def _cache_dir():
@@ -1335,7 +1459,7 @@ class ThumbGrid(tk.Frame):
         self.pending.discard(path)
         if path not in self.labels:
             return
-        self.photos[path] = ImageTk.PhotoImage(pil_image)
+        self.photos[path] = ImageTk.PhotoImage(pil_image, master=self)
         while len(self.photos) > self.MAX_PHOTOS:
             self.photos.popitem(last=False)
         first, last = self._visible_range()
@@ -1538,6 +1662,7 @@ class ImageRenamerGUI(_BaseTk):
             "exit": "exit.png"}.items()}
 
         self.recursive_var = tk.BooleanVar(value=self.settings.config.getboolean('UI', 'recursive'))
+        self.history = UndoHistory(os.path.join(_config_dir(), "history.json"))
         self.setup_menu()
         # Csak a főablakban: a téma beírása közben a Ctrl+Z ne az utolsó átnevezést vonja vissza
         for seq in ("<Control-z>", "<Control-Z>"):
@@ -1570,8 +1695,6 @@ class ImageRenamerGUI(_BaseTk):
         # A bélyegkép-gyorsítótár méretének korlátozása a háttérben
         threading.Thread(target=ThumbnailGenerator.cache.prune, daemon=True).start()
         self.prev_suffixes = self.settings.recent_suffixes
-        self.last_rename = []  # [(régi, új)] a visszavonáshoz
-        self.last_created_folders = []  # a visszavonáskor törlendő, általunk létrehozott mappák
         self.busy = False
         self.running = True
         self.folder = ""
@@ -1685,8 +1808,21 @@ class ImageRenamerGUI(_BaseTk):
         edit_menu = tk.Menu(menu, tearoff=0)
         edit_menu.add_command(label=self.t("btn_undo"), accelerator="Ctrl+Z", command=self.undo_last)
         edit_menu.add_command(label=self.t("btn_daysort"), command=self.sort_by_day)
+        edit_menu.add_command(label=self.t("menu_duplicates"), command=self.find_duplicates_ui)
         menu.add_cascade(label=self.t("menu_edit"), menu=edit_menu)
         self.config(menu=menu)
+        self.edit_menu = edit_menu
+        self._refresh_undo_label()
+
+    def _refresh_undo_label(self):
+        """A Szerkesztés menü első sora megmutatja, mi lenne visszavonva."""
+        step = self.history.last()
+        if step:
+            label = self.t("undo_menu", what=self.t("history_" + step["kind"]), n=len(step["moves"]),
+                           time=step["time"])
+        else:
+            label = self.t("btn_undo")
+        self.edit_menu.entryconfigure(0, label=label, state=tk.NORMAL if step else tk.DISABLED)
 
     # --- beállítások -------------------------------------------------------
     def edit_templates(self):
@@ -2280,8 +2416,8 @@ class ImageRenamerGUI(_BaseTk):
 
     def _rename_finished(self, r):
         if r["done"]:
-            self.last_rename = r["done"]
-            self.last_created_folders = [r["created"]] if r["created"] else []
+            self.history.push("rename", r["done"], [r["created"]] if r["created"] else [])
+            self._refresh_undo_label()
         lines = [self.t("renamed", n=len(r["done"]))
                  + (self.t("moved_to", folder=r["target"]) if r["target"] else "")]
         if r["unchanged"]:
@@ -2298,13 +2434,16 @@ class ImageRenamerGUI(_BaseTk):
     def undo_last(self):
         if self.busy:
             return
-        if not self.last_rename:
+        step = self.history.last()
+        if not step:
             self.show_info(self.t("info"), self.t("undo_none"))
             return
-        if not messagebox.askyesno(self.t("btn_undo"), self.t("undo_confirm", n=len(self.last_rename))):
+        if not messagebox.askyesno(self.t("btn_undo"), self.t(
+                "undo_confirm", what=self.t("history_" + step["kind"]), time=step["time"],
+                n=len(step["moves"]), left=len(self.history) - 1)):
             return
-        reverse_plan = [(new, old) for old, new in reversed(self.last_rename)]
-        created = self.last_created_folders
+        reverse_plan = [(new, old) for old, new in reversed(step["moves"])]
+        created = step["created"]
         self.close_video_player()
 
         def work():
@@ -2314,7 +2453,8 @@ class ImageRenamerGUI(_BaseTk):
 
         def finished(result):
             done, errors = result
-            self.last_rename, self.last_created_folders = [], []
+            self.history.pop()
+            self._refresh_undo_label()
             msg = self.t("undo_done", n=len(done))
             if errors:
                 self.show_error(msg + "\n\n" + self.t("rename_errors", n=len(errors)) + "\n".join(errors[:20]))
@@ -2448,8 +2588,8 @@ class ImageRenamerGUI(_BaseTk):
         def finished(result):
             done, errors, created = result
             if done:
-                self.last_rename = done
-                self.last_created_folders = created
+                self.history.push("daysort", done, created)
+                self._refresh_undo_label()
             else:
                 remove_empty_folders(created)
             days = len({os.path.dirname(new) for _, new in done})
@@ -2463,6 +2603,57 @@ class ImageRenamerGUI(_BaseTk):
             self.load_media()
 
         self.run_in_background(work, finished)
+
+    # --- duplikátumok ------------------------------------------------------
+    def find_duplicates_ui(self):
+        """Azonos tartalmú fájlok keresése a kijelöltek (ha nincs kijelölés, a láthatók) között."""
+        if self.busy:
+            self.show_info(self.t("info"), self.t("busy"))
+            return
+        paths = self.selected_paths() or list(self.grid_view.paths)
+        if len(paths) < 2:
+            self.show_info(self.t("info"), self.t("dup_none"))
+            return
+
+        def work():
+            return find_duplicates(paths, lambda i, n: self.call_in_ui(
+                self.set_status, self.t("dup_progress", i=i, n=n)))
+
+        self.run_in_background(work, lambda groups: self.after(0, self._show_duplicates, groups))
+
+    def _show_duplicates(self, groups):
+        self.set_status(self.t("ready"))
+        if not groups:
+            self.show_info(self.t("info"), self.t("dup_none"))
+            return
+        extra = [p for g in groups for p in g[1:]]
+        size = sum(os.path.getsize(p) for p in extra if os.path.exists(p))
+        win = tk.Toplevel(self)
+        win.title(self.t("dup_title"))
+        win.transient(self)
+        win.geometry("820x480")
+        tk.Label(win, text=self.t("dup_summary", g=len(groups), n=len(extra), mb=size / 1024 / 1024),
+                 justify=tk.LEFT, anchor="w", wraplength=780).pack(fill=tk.X, padx=10, pady=(10, 4))
+        tree = self._preview_tree(win, [("#0", self.t("dup_col_file"), 520), ("role", "", 200)])
+        for i, group in enumerate(groups, 1):
+            node = tree.insert("", tk.END, text=self.t("dup_group", i=i, n=len(group)), open=True)
+            for j, p in enumerate(group):
+                tree.insert(node, tk.END, text=os.path.relpath(p, self.folder) if self.folder else p,
+                            values=(self.t("dup_keep") if j == 0 else self.t("dup_copy"),))
+
+        def select_copies():
+            self.grid_view.selected = set(extra)
+            self.grid_view.redraw()
+            self._update_counts()
+            win.destroy()
+            self.show_info(self.t("info"), self.t("dup_selected", n=len(extra)))
+
+        bottom = tk.Frame(win)
+        bottom.pack(pady=10)
+        ttk.Button(bottom, text=self.t("dup_select"), command=select_copies).pack(side=tk.LEFT, padx=4)
+        ttk.Button(bottom, text=self.t("cancel"), command=win.destroy).pack(side=tk.LEFT, padx=4)
+        win.bind("<Escape>", lambda e: win.destroy())
+        win.focus_set()
 
     def get_suffix(self):
         """Téma választó ablak pipálható mozgatási opcióval"""
@@ -2559,6 +2750,8 @@ class ImageRenamerGUI(_BaseTk):
         if self.busy and not messagebox.askyesno(self.t("btn_exit"), self.t("busy_exit"),
                                                  icon=messagebox.WARNING):
             return
+        if not self.running:
+            return  # már bezárva
         self.running = False
         self.async_loader.stop()
         try:
