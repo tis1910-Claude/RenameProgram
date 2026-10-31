@@ -27,6 +27,11 @@ Példa: `IMG_1234.jpg` → `2024-05-01_14-30-00_Balaton.jpg`
   Az ffprobe csak az AVI/MKV/MTS fájlokhoz és a videós bélyegképekhez kell.
 - Testreszabható névsablon (*Beállítások → Átnevezési sablonok*):
   `{date}` `{day}` `{time}` `{suffix}` `{seq}` `{original}` `{counter}`
+- **Előnézet átnevezés előtt**: minden fájl jelenlegi neve, felvételi ideje és új neve látszik, és csak az OK után
+  történik meg az átnevezés.
+- **Időeltolás** az előnézetben (átnevezésnél és napok szerinti rendezésnél is): ha a fényképező órája rosszul
+  járt, pl. `+1`, `-0:30` vagy `+1d 2:00` beírásával a kijelölt fájlok ideje eltolódik. A fájlok tartalmát
+  (EXIF) a program nem módosítja, csak a név és a napi mappa igazodik hozzá.
 - Ütközésvédelem: létező fájlt soha nem ír felül
 - **Rendezés napok szerint**: a kijelölt (vagy kijelölés nélkül az összes betöltött) fájlt a felvétel napja
   szerinti `ÉÉÉÉ-HH-NN` almappába helyezi át, a fájlnév megmarad. Előnézetet mutat (napokra bontva, az új
