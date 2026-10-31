@@ -7,7 +7,14 @@ Példa: `IMG_1234.jpg` → `2024-05-01_14-30-00_Balaton.jpg`
 
 ## Funkciók
 
-- Bélyegképes áttekintés (fotók helyes elforgatással, videóknál képkocka az ffmpeg-gel)
+- Bélyegképes áttekintés (fotók helyes elforgatással, videóknál képkocka az ffmpeg-gel). Több ezer fájlnál is gyors:
+  csak a látható képek töltődnek be, és a kész bélyegképeket a program lemezen megőrzi (legfeljebb kb. 300 MB,
+  Windowson `%LOCALAPPDATA%\MediaRenamerPro\thumbs`), így a mappa következő megnyitása azonnali.
+- Kijelölés: kattintás a képre (be/ki), **Shift+kattintás** egy tartományra, Ctrl+A az összesre;
+  dupla kattintás megnyitja, a 📁 jel a fájlkezelőben mutatja meg. Az állapotsor mutatja, hány fájl van kijelölve.
+- Szűrő a lista fölött: típus (képek, videók, RAW), névrészlet, dátumtartomány (`ÉÉÉÉ-HH-NN`), és
+  „csak metaadat nélkül” (amelyeknél a fájl dátuma lenne a név). Az átnevezés, rendezés és törlés csak a látható,
+  kijelölt fájlokra vonatkozik.
 - Dátum forrása: fotóknál EXIF (`DateTimeOriginal`), videóknál ffprobe (`creation_time`, iPhone-on az Apple saját mezője).
   Ha egyik sincs, a fájl dátuma lesz használva, és a program ezt jelzi.
   Ha a videó a felvétel helyének időeltolását is tartalmazza (iPhone), a felvétel helyi ideje lesz a név, ahogy a

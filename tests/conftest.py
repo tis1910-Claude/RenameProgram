@@ -39,3 +39,10 @@ def make_video(path, seconds, creation_time=None):
         cmd += ["-metadata", f"creation_time={creation_time}"]
     subprocess.run(cmd + [path], check=True)
     return path
+
+
+@pytest.fixture(autouse=True)
+def _thumb_cache_in_tmp(tmp_path_factory, monkeypatch):
+    """A tesztek ne a felhasználó valódi bélyegkép-gyorsítótárába írjanak."""
+    import Keprename5video as m
+    monkeypatch.setattr(m.ThumbnailGenerator, "cache", m.ThumbnailCache(str(tmp_path_factory.mktemp("thumbs"))))
