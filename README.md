@@ -10,13 +10,17 @@ Példa: `IMG_1234.jpg` → `2024-05-01_14-30-00_Balaton.jpg`
 - Bélyegképes áttekintés (fotók helyes elforgatással, videóknál képkocka az ffmpeg-gel)
 - Dátum forrása: fotóknál EXIF (`DateTimeOriginal`), videóknál ffprobe (`creation_time`, iPhone-on az Apple saját mezője).
   Ha egyik sincs, a fájl dátuma lesz használva, és a program ezt jelzi.
+  Ha a videó a felvétel helyének időeltolását is tartalmazza (iPhone), a felvétel helyi ideje lesz a név, ahogy a
+  fotóknál is, így egy külföldi út fotói és videói ugyanarra az órára és napra esnek. A csak UTC-t tartalmazó
+  videóknál (`creation_time`) a gép helyi ideje lesz használva.
+- A macOS által pendrive-ra/SD-kártyára írt `._` kezdetű kísérőfájlokat a program kihagyja.
 - Testreszabható névsablon (*Beállítások → Átnevezési sablonok*):
   `{date}` `{day}` `{time}` `{suffix}` `{seq}` `{original}` `{counter}`
 - Ütközésvédelem: létező fájlt soha nem ír felül
 - **Rendezés napok szerint**: a kijelölt (vagy kijelölés nélkül az összes betöltött) fájlt a felvétel napja
   szerinti `ÉÉÉÉ-HH-NN` almappába helyezi át, a fájlnév megmarad. Előnézetet mutat (napokra bontva, az új
-  mappák `(+)` jellel), az *Almappák is* beállítás szerint az almappákban lévő fájlokat is rendezi, a videók
-  UTC-időt helyi időre váltja, a metaadat nélküli fájlokat a fájl dátuma szerint rendezi (ez kikapcsolható),
+  mappák `(+)` jellel), az *Almappák is* beállítás szerint az almappákban lévő fájlokat is rendezi, a
+  metaadat nélküli fájlokat a fájl dátuma szerint rendezi (ez kikapcsolható),
   és névütközéskor `_1`, `_2` végződést ad. Visszavonható (Ctrl+Z); az általa létrehozott üres mappákat ilyenkor törli.
 - Utolsó átnevezés vagy rendezés visszavonása (*Szerkesztés → Visszavonás*, Ctrl+Z)
 - Törlés lomtárba (`send2trash`), almappák be-/kikapcsolása, mappa behúzása az ablakba

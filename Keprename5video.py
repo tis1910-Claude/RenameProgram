@@ -76,7 +76,9 @@ def is_video(path):
 
 
 def is_media(path):
-    return path.lower().endswith(MEDIA_EXTS)
+    # A macOS a FAT/exFAT meghajtókra (SD-kártya, pendrive) "._IMG_1234.JPG" kísérőfájlokat ír:
+    # ezek nem képek, nem szabad őket átnevezni vagy mozgatni
+    return path.lower().endswith(MEDIA_EXTS) and not os.path.basename(path).startswith("._")
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +124,7 @@ TEXTS = {
         "none_selected_title": "Nincs kijelölve",
         "none_selected": "Jelölj ki legalább egy fájlt!",
         "busy": "Egy művelet még fut, várj egy kicsit.",
+        "busy_exit": "Egy művelet még fut. Ha most kilépsz, félbeszakad. Biztosan kilépsz?",
         "suffix_title": "Téma választása",
         "suffix_prompt": "Mi legyen a képek/videók neve?:",
         "move_check": "File-ok másik könyvtárba mozgatása",
@@ -208,6 +211,7 @@ TEXTS = {
         "none_selected_title": "Nothing selected",
         "none_selected": "Select at least one file!",
         "busy": "An operation is still running, please wait.",
+        "busy_exit": "An operation is still running and will be interrupted. Exit anyway?",
         "suffix_title": "Choose topic",
         "suffix_prompt": "What should the pictures/videos be called?:",
         "move_check": "Move files to a separate folder",
@@ -347,8 +351,10 @@ def get_exif_datetime(path):
 
 
 def parse_iso_datetime(text):
-    """ISO 8601 dátum (pl. 2023-05-01T10:20:30.000000Z vagy ...+0200) helyi időre,
-    időzóna nélkül. A 'Z'/eltolás nélküli értéket UTC-nek veszi (QuickTime szabvány)."""
+    """ISO 8601 dátum (pl. 2023-05-01T10:20:30.000000Z vagy ...+0200), időzóna nélkül.
+    Kiírt eltolásnál (iPhone: ...+0200) a felvétel helyén mért időt adja, ahogy a fotók
+    EXIF-je is, így külföldön készült fotók és videók ugyanarra az órára és napra esnek.
+    A 'Z'/eltolás nélküli értéket UTC-nek veszi (QuickTime szabvány), és a gép helyi idejére váltja."""
     if not text:
         return None
     s = text.strip().replace("Z", "+00:00")
@@ -365,6 +371,8 @@ def parse_iso_datetime(text):
                 continue
     if dt is None or dt.year < 1980:  # 1904/1970 = üres QuickTime mező
         return None
+    if dt.tzinfo is not None and not text.strip().upper().endswith("Z"):
+        return dt.replace(tzinfo=None)
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone().replace(tzinfo=None)
@@ -457,14 +465,19 @@ def validate_pattern(pattern):
     if not pattern or not pattern.strip():
         return "üres / empty"
     try:
-        fields = {f for _, f, spec, conv in string.Formatter().parse(pattern) if f is not None}
+        parsed = [(f, spec, conv) for _, f, spec, conv in string.Formatter().parse(pattern) if f is not None]
     except ValueError as e:
         return str(e)
+    fields = {f for f, _, _ in parsed}
     unknown = fields - PATTERN_FIELDS
     if unknown:
         return "ismeretlen mező / unknown field: " + ", ".join("{%s}" % f for f in sorted(unknown))
     if "" in fields:
         return "üres {} mező / empty {} field"
+    # Minden mező kész szöveg, ezért a {seq:05d}, {date:%Y} vagy {date!r} alak átnevezéskor elszállna
+    bad = [f for f, spec, conv in parsed if spec or conv]
+    if bad:
+        return "formázás nem használható / format spec not allowed: " + ", ".join("{%s}" % f for f in bad)
     if _INVALID_CHARS.search(re.sub(r"\{[^}]*\}", "", pattern)):
         return 'tiltott karakter / invalid character: < > : " / \\ | ? *'
     return None
@@ -908,7 +921,9 @@ class ImageRenamerGUI(_BaseTk):
 
         self.recursive_var = tk.BooleanVar(value=self.settings.config.getboolean('UI', 'recursive'))
         self.setup_menu()
-        self.bind_all("<Control-z>", lambda e: self.undo_last())
+        # Csak a főablakban: a téma beírása közben a Ctrl+Z ne az utolsó átnevezést vonja vissza
+        for seq in ("<Control-z>", "<Control-Z>"):
+            self.bind_all(seq, self._on_undo_key)
 
         self.exit_button = tk.Button(self.btn_frame, text=self.t("btn_exit"), image=self.icons["exit"],
                                      compound="left", command=self.on_close)
@@ -965,6 +980,14 @@ class ImageRenamerGUI(_BaseTk):
     def t(self, key, **kwargs):
         text = TEXTS[self.lang].get(key) or TEXTS["hu"].get(key, key)
         return text.format(**kwargs) if kwargs else text
+
+    def _on_undo_key(self, event):
+        try:
+            if event.widget.winfo_toplevel() is not self or isinstance(event.widget, (tk.Entry, ttk.Entry)):
+                return
+        except (AttributeError, KeyError, tk.TclError):
+            return
+        self.undo_last()
 
     def call_in_ui(self, func, *args):
         """Szálbiztos: bármely szálból hívható, a func a fő szálon fut le."""
@@ -1248,6 +1271,11 @@ class ImageRenamerGUI(_BaseTk):
             pass
 
     def _on_recursive_toggle(self):
+        if self.busy:
+            # Most nem tölthető újra a lista: ne mutasson mást a pipa, mint amit a lista
+            self.recursive_var.set(not self.recursive_var.get())
+            self.show_info(self.t("info"), self.t("busy"))
+            return
         self.settings.config['UI']['recursive'] = 'yes' if self.recursive_var.get() else 'no'
         self.settings.save_settings()
         self.load_media()
@@ -1426,6 +1454,7 @@ class ImageRenamerGUI(_BaseTk):
         if not suffix:
             return
         pattern, base_folder = self.settings.pattern, self.folder
+        self.close_video_player()  # Windowson a lejátszott fájl nem nevezhető át
 
         def work():
             items, file_dated = [], 0
@@ -1448,6 +1477,8 @@ class ImageRenamerGUI(_BaseTk):
             plan = plan_renames(items, suffix, pattern, target_folder)
             done, unchanged, errors = execute_plan(
                 plan, lambda i, n: self.call_in_ui(self.set_status, self.t("renaming", i=i, n=n)))
+            if created and not done:
+                remove_empty_folders([target_folder])  # semmi sem került bele: ne maradjon üres mappa
             return {"done": done, "unchanged": unchanged, "errors": errors, "file_dated": file_dated,
                     "target": target_folder, "created": target_folder if created else None}
 
@@ -1480,6 +1511,7 @@ class ImageRenamerGUI(_BaseTk):
             return
         reverse_plan = [(new, old) for old, new in reversed(self.last_rename)]
         created = self.last_created_folders
+        self.close_video_player()
 
         def work():
             done, _, errors = execute_plan(reverse_plan)
@@ -1725,6 +1757,10 @@ class ImageRenamerGUI(_BaseTk):
 
     # --- kilépés, üzenetek -------------------------------------------------
     def on_close(self):
+        # Kilépéskor a háttérszál félbeszakad; másik meghajtóra mozgatásnál félkész másolat maradhat
+        if self.busy and not messagebox.askyesno(self.t("btn_exit"), self.t("busy_exit"),
+                                                 icon=messagebox.WARNING):
+            return
         self.running = False
         self.async_loader.stop()
         try:

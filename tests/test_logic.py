@@ -26,6 +26,7 @@ ff(os.path.join(d,"long.mov"), 8, "2023-07-16T13:00:00Z")
 ok = lambda c, msg: print(("OK  " if c else "FAIL"), msg) or c
 files = m.scan_media(d, True); ok(len(files)==7, f"rekurzív scan: {len(files)}")
 ok(len(m.scan_media(d, False))==6, "nem rekurzív scan")
+ok(not m.is_media(os.path.join(d, "._IMG_1234.JPG")) and m.is_media("IMG_1234.JPG"), "macOS ._ kísérőfájl kimarad")
 
 dt, src = m.get_media_datetime(os.path.join(d,"a.jpg")); ok((dt,src)==(datetime(2023,7,15,10,20,30),"exif"), f"JPEG EXIF {dt} {src}")
 dt, src = m.get_media_datetime(os.path.join(d,"p.png")); ok(src=="exif" and dt.year==2022, f"PNG EXIF (régi kód None-t adott) {dt} {src}")
@@ -33,7 +34,8 @@ dt, src = m.get_media_datetime(os.path.join(d,"noexif.jpg")); ok(src=="file", f"
 dt, src = m.get_media_datetime(os.path.join(d,"short.mp4"))
 exp = m.parse_iso_datetime("2023-07-16T12:00:00Z")
 ok(src=="video" and dt==exp, f"videó dátum UTC->helyi {dt} ({src})")
-ok(m.parse_iso_datetime("2023-07-16T14:00:00+0200")==m.parse_iso_datetime("2023-07-16T12:00:00Z"), "apple +0200 eltolás")
+ok(m.parse_iso_datetime("2023-07-16T14:00:00+0200")==datetime(2023,7,16,14,0,0), "apple +0200: a felvétel helyi ideje marad")
+ok(m.parse_iso_datetime("2023-07-16T22:30:00-0400")==datetime(2023,7,16,22,30,0), "külföldi videó napja nem csúszik át (-0400)")
 ok(m.parse_iso_datetime("1904-01-01T00:00:00Z") is None, "üres 1904 dátum elutasítva")
 
 # bélyegképek
@@ -53,6 +55,8 @@ ok(m.validate_pattern("{datum}_{suffix}") is not None, "ismeretlen mező elutas�
 ok(m.validate_pattern("{date}/{suffix}") is not None, "perjel elutasítva")
 ok(m.validate_pattern("{date}_{suffix") is not None, "hibás kapcsos zárójel")
 ok(m.validate_pattern("{day}_{time}_{suffix}_{counter}") is None, "érvényes sablon")
+ok(m.validate_pattern("{seq:05d}_{suffix}") is not None, "formázási előírás elutasítva (átnevezéskor elszállna)")
+ok(m.validate_pattern("{date!r}_{suffix}") is not None, "konverzió elutasítva")
 
 # átnevezés helyben
 items = [(f, m.get_media_datetime(f)[0]) for f in files]
