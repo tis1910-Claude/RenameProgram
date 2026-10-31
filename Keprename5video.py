@@ -831,24 +831,69 @@ def _is_free_for(new_path, path, exists=os.path.exists):
         return False
 
 
-def plan_renames(items, suffix, pattern, target_dir=None, exists=os.path.exists):
+# --- Live Photo párok: IMG_1234.HEIC + IMG_1234.MOV ugyanabban a mappában -----
+LIVE_PHOTO_EXTS = (".heic", ".heif", ".jpg", ".jpeg")
+LIVE_VIDEO_EXTS = (".mov", ".mp4")
+
+
+def find_live_pairs(paths):
+    """{fotó: [videó]} az azonos mappában, azonos nevű (kis/nagybetű mindegy) fotó + videó párokra."""
+    photos, videos = {}, {}
+    for p in paths:
+        stem, ext = os.path.splitext(p)
+        key = _key(stem)
+        if ext.lower() in LIVE_PHOTO_EXTS:
+            photos.setdefault(key, p)
+        elif ext.lower() in LIVE_VIDEO_EXTS:
+            videos.setdefault(key, []).append(p)
+    return {photo: sorted(videos[key]) for key, photo in photos.items() if key in videos}
+
+
+def with_live_partners(selected, all_paths):
+    """A kijelölés kiegészítve a párok hiányzó tagjával. Vissza: (útvonalak, {fotó: [videó]})."""
+    pairs = find_live_pairs(all_paths)
+    partner_of = {v: photo for photo, vids in pairs.items() for v in vids}
+    chosen = set(selected)
+    used = {}
+    for p in selected:
+        photo = p if p in pairs else partner_of.get(p)
+        if photo:
+            used[photo] = pairs[photo]
+            chosen.add(photo)
+            chosen.update(pairs[photo])
+    ordered = [p for p in all_paths if p in chosen] + [p for p in selected if p not in set(all_paths)]
+    return ordered, used
+
+
+def _split_partners(items, partners):
+    """A párok videói kikerülnek az önálló elemek közül; a fotóval együtt kapnak nevet és dátumot."""
+    partners = partners or {}
+    followers = {v for vids in partners.values() for v in vids}
+    return [it for it in items if it[0] not in followers], partners
+
+
+def plan_renames(items, suffix, pattern, target_dir=None, exists=os.path.exists, partners=None):
     """items: [(útvonal, datetime)] -> [(régi, új)].
-    A tervezett nevek egymással és a lemezen lévő fájlokkal sem ütközhetnek."""
+    A tervezett nevek egymással és a lemezen lévő fájlokkal sem ütközhetnek.
+    partners: {fotó: [videó]} (Live Photo): a videó a fotóval azonos nevet kap, csak a kiterjesztés más."""
+    items, partners = _split_partners(items, partners)
     items = sorted(items, key=lambda it: (it[1], it[0]))
     reserved = set()
     plan = []
     for seq, (path, dt) in enumerate(items, 1):
         folder = target_dir or os.path.dirname(path)
         stem, ext = os.path.splitext(os.path.basename(path))
+        group = [path] + partners.get(path, [])
         counter = 0
         while True:
-            new_path = os.path.join(folder, render_name(pattern, dt, suffix, counter, seq, stem, ext))
-            k = _key(new_path)
-            if k not in reserved and _is_free_for(new_path, path, exists):
+            base = render_name(pattern, dt, suffix, counter, seq, stem, "")
+            news = [os.path.join(folder, base + os.path.splitext(p)[1]) for p in group]
+            if all(_key(n) not in reserved and _is_free_for(n, p, exists) for n, p in zip(news, group)):
                 break
             counter += 1
-        reserved.add(k)
-        plan.append((path, new_path))
+        for p, n in zip(group, news):
+            reserved.add(_key(n))
+            plan.append((p, n))
     return plan
 
 
@@ -984,29 +1029,32 @@ def day_folder(base_folder, dt):
     return os.path.join(base_folder, dt.strftime("%Y-%m-%d"))
 
 
-def plan_day_sort(items, base_folder, exists=os.path.exists):
+def plan_day_sort(items, base_folder, exists=os.path.exists, partners=None):
     """items: [(útvonal, datetime)] -> (terv [(régi, új)], már a helyén lévők száma).
     A fájlnév marad; ütközéskor _1, _2... kerül a név végére. A már a helyes
-    napi mappában lévő fájlok kimaradnak a tervből."""
+    napi mappában lévő fájlok kimaradnak a tervből. partners: {fotó: [videó]} (Live Photo):
+    a videó a fotó napjába kerül, és ütközéskor ugyanazt a végződést kapja."""
+    items, partners = _split_partners(items, partners)
     reserved = set()
     plan, in_place = [], 0
     for path, dt in sorted(items, key=lambda it: (it[1], it[0])):
         folder = day_folder(base_folder, dt)
+        group = [path] + partners.get(path, [])
         if _key(os.path.dirname(path)) == _key(folder):
-            in_place += 1
-            reserved.add(_key(path))
+            in_place += len(group)
+            reserved.update(_key(p) for p in group)
             continue
-        stem, ext = os.path.splitext(os.path.basename(path))
+        stem = os.path.splitext(os.path.basename(path))[0]
         counter = 0
         while True:
-            name = f"{stem}_{counter}{ext}" if counter else stem + ext
-            new_path = os.path.join(folder, name)
-            k = _key(new_path)
-            if k not in reserved and not exists(new_path):
+            base = f"{stem}_{counter}" if counter else stem
+            news = [os.path.join(folder, base + os.path.splitext(p)[1]) for p in group]
+            if all(_key(n) not in reserved and not exists(n) for n in news):
                 break
             counter += 1
-        reserved.add(k)
-        plan.append((path, new_path))
+        for p, n in zip(group, news):
+            reserved.add(_key(n))
+            plan.append((p, n))
     return plan, in_place
 
 
@@ -1393,6 +1441,7 @@ class ThumbGrid(tk.Frame):
         self.paths = []          # a látható (szűrt) lista, sorrendben
         self.labels = {}         # útvonal -> megjelenített név
         self.selected = set()    # kijelölt útvonalak (a szűrés nem törli)
+        self.live = set()        # Live Photo fotók (van azonos nevű videójuk)
         self.anchor = None       # a Shift+kattintás tartományának kezdete
         self.photos = OrderedDict()  # útvonal -> PhotoImage (LRU)
         self.pending = set()
@@ -1492,6 +1541,10 @@ class ThumbGrid(tk.Frame):
                 c.create_line(bx + 4, by + 9, bx + 8, by + 13, bx + 14, by + 5, fill="white", width=2,
                               tags="cell")
             c.create_text(tx + 140, ty + 137, text="📁", tags="cell")
+            if path in self.live:
+                c.create_rectangle(tx + 3, ty + 3, tx + 37, ty + 17, fill="#000000", outline="", tags="cell")
+                c.create_text(tx + 20, ty + 10, text="LIVE", fill="#ffffff", font=("TkDefaultFont", 7, "bold"),
+                              tags="cell")
             c.create_text(x0 + self.CELL_W // 2, ty + 154, text=short_name(self.labels.get(path, path)),
                           width=self.CELL_W - 14, anchor="n", fill=col["fg"], justify="center", tags="cell")
 
@@ -2164,6 +2217,7 @@ class ImageRenamerGUI(_BaseTk):
         self.files = files
         recursive = self.recursive_var.get()
         labels = {p: os.path.relpath(p, self.folder) if recursive else os.path.basename(p) for p in files}
+        self.grid_view.live = set(find_live_pairs(files))
         self.grid_view.set_items(self.filtered(files), labels)
         self._update_counts()
         self.set_status(self.t("loaded", n=len(files)))
@@ -2348,6 +2402,8 @@ class ImageRenamerGUI(_BaseTk):
         if not suffix:
             return
         pattern, base_folder = self.settings.pattern, self.folder
+        # Live Photo: a fotó és a videója együtt mozog, akkor is, ha csak az egyik van kijelölve
+        selected, partners = with_live_partners(selected, self.files)
 
         def work():
             items = []
@@ -2358,7 +2414,7 @@ class ImageRenamerGUI(_BaseTk):
             return items
 
         self.run_in_background(work, lambda items: self.after(
-            0, self._rename_preview, items, suffix, move_files, pattern, base_folder))
+            0, self._rename_preview, items, suffix, move_files, pattern, base_folder, partners))
 
     def _add_shift_row(self, win, on_change):
         """Időeltolás mező az előnézetekhez. Vissza: függvény, ami a timedelta-t adja (hibánál None)."""
@@ -2411,7 +2467,7 @@ class ImageRenamerGUI(_BaseTk):
         win.bind("<Escape>", lambda e: win.destroy())
         return ok_btn
 
-    def _rename_preview(self, items, suffix, move_files, pattern, base_folder):
+    def _rename_preview(self, items, suffix, move_files, pattern, base_folder, partners=None):
         self.set_status(self.t("ready"))
         file_dated = {path for path, _, source in items if source == "file"}
         name_dated = {path for path, _, source in items if source == "filename"}
@@ -2444,8 +2500,10 @@ class ImageRenamerGUI(_BaseTk):
                 return
             shifted = [(p, dt + delta) for p, dt, _ in items]
             target = move_target_folder(base_folder, shifted, suffix) if move_files else None
-            plan = plan_renames(shifted, suffix, pattern, target)
+            plan = plan_renames(shifted, suffix, pattern, target, partners=partners)
             dates = dict(shifted)
+            for photo, videos in (partners or {}).items():
+                dates.update((v, dates[photo]) for v in videos if photo in dates)
             state.update(plan=plan, target=target)
             tree.delete(*tree.get_children())
             unchanged = 0
@@ -2557,6 +2615,7 @@ class ImageRenamerGUI(_BaseTk):
                 return
             selected = shown
         base_folder = self.folder
+        selected, partners = with_live_partners(selected, self.files)
 
         def work():
             items = []
@@ -2567,9 +2626,10 @@ class ImageRenamerGUI(_BaseTk):
             return items
 
         # Az előnézet saját eseményhurkot futtat, ezért ne a UI-sor feldolgozásán belül nyíljon meg
-        self.run_in_background(work, lambda items: self.after(0, self._daysort_preview, base_folder, items))
+        self.run_in_background(work, lambda items: self.after(
+            0, self._daysort_preview, base_folder, items, partners))
 
-    def _daysort_preview(self, base_folder, items):
+    def _daysort_preview(self, base_folder, items, partners=None):
         self.set_status(self.t("ready"))
         file_dated = {path for path, _, source in items if source == "file"}
         name_dated = {path for path, _, source in items if source == "filename"}
@@ -2616,7 +2676,7 @@ class ImageRenamerGUI(_BaseTk):
                 ok_btn.state(["disabled"])
                 return
             chosen = [(p, dt + delta) for p, dt in dates.items() if include_var.get() or p not in file_dated]
-            plan, in_place = plan_day_sort(chosen, base_folder)
+            plan, in_place = plan_day_sort(chosen, base_folder, partners=partners)
             state["plan"] = plan
             tree.delete(*tree.get_children())
             days = {}
@@ -2790,6 +2850,7 @@ class ImageRenamerGUI(_BaseTk):
         if not selected:
             self.show_info(self.t("none_selected_title"), self.t("delete_none"))
             return
+        selected, _ = with_live_partners(selected, self.files)  # a Live Photo videója is megy
 
         question = "delete_confirm_trash" if send2trash else "delete_confirm_perm"
         if not messagebox.askyesno(self.t("delete_confirm_title"), self.t(question, n=len(selected)),
