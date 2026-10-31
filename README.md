@@ -57,14 +57,23 @@ Linuxon `~/.config/MediaRenamerPro/settings.ini`, macOS-en `~/Library/Applicatio
 
 ## Tesztek
 
-A nem grafikus részek (dátumolvasás, sablon, ütközések, mozgatás, napok szerinti rendezés, visszavonás) tesztje valódi
-JPEG/PNG/MP4 fájlokat generál, ehhez ffmpeg kell:
+A nem grafikus részek (dátumolvasás, sablon, ütközések, mozgatás, napok szerinti rendezés, visszavonás) tesztjei
+valódi JPEG/PNG/MP4 fájlokat generálnak. A videós tesztekhez ffmpeg kell, nélküle ezek kimaradnak.
 
 ```
-python tests/test_logic.py
+pip install -r requirements-dev.txt
+python -m pytest
 ```
+
+A GitHub minden PR-nél és a main minden változásánál lefuttatja őket Linuxon és Windowson is (*Actions → Tesztek*).
 
 ## EXE készítése (opcionális)
+
+A legegyszerűbb: GitHubon *Actions → Windows EXE → Run workflow*, és a lefutás után a kész `MediaRenamerPro.exe`
+letölthető az *Artifacts* részből. Ha `v`-vel kezdődő címkét (pl. `v4.4`) töltesz fel, az EXE a Release-hez is
+hozzá lesz csatolva.
+
+Kézzel:
 
 ```
 pip install pyinstaller
