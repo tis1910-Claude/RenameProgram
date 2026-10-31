@@ -54,19 +54,61 @@ def app(tmp_path, monkeypatch):
     import tkinter as tk
     import Keprename5video as m
     monkeypatch.setattr(m, "_config_dir", lambda: str(tmp_path / "cfg"))
+    # Egy váratlan üzenetablak ne akassza meg a tesztet (a tesztek felülírhatják)
+    for name in ("showinfo", "showwarning", "showerror"):
+        monkeypatch.setattr(m.messagebox, name, lambda *a, **k: None)
+    for name in ("askyesno", "askokcancel"):
+        monkeypatch.setattr(m.messagebox, name, lambda *a, **k: True)
     try:
         gui = m.ImageRenamerGUI()
     except tk.TclError as e:
         pytest.skip(f"nincs kijelző: {e}")
     gui.geometry("1000x700")
     yield gui
+    if gui.running:
+        pump(gui, 0, until=lambda: not gui.busy, limit=20)
     gui.on_close()
 
 
-def pump(app, seconds):
-    """A Tk eseményhurok futtatása adott ideig (a háttérszálak eredményei így érkeznek meg)."""
+def pump(app, seconds, until=None, limit=10):
+    """A Tk eseményhurok futtatása adott ideig (a háttérszálak eredményei így érkeznek meg),
+    until megadásakor addig, amíg a feltétel teljesül (legfeljebb limit másodpercig)."""
     import time
-    end = time.time() + seconds
-    while time.time() < end:
+    start = time.time()
+    while True:
+        elapsed = time.time() - start
+        if until is not None and (until() or elapsed >= limit):
+            break
+        if until is None and elapsed >= seconds:
+            break
         app.update()
         time.sleep(0.02)
+
+
+def accept_dialog(app, prepare=None):
+    """Megvárja a következő saját párbeszédablakot, előkészíti, majd az OK gombjával elfogadja.
+
+    Nem Enter-eseményt küld: Windowson a billentyűesemény a fókuszban lévő ablakhoz megy,
+    és ha az nem a párbeszédablak, a teszt örökre várna."""
+    import tkinter as tk
+    from tkinter import ttk
+    import Keprename5video as m
+
+    def press_ok(win):
+        ok = app.t("ok")
+        for w in m.ImageRenamerGUI._walk(win):
+            if isinstance(w, ttk.Button) and w.cget("text") == ok:
+                w.invoke()
+                return
+
+    def step():
+        tops = [w for w in app.winfo_children() if isinstance(w, tk.Toplevel) and w.winfo_exists()]
+        if not tops:
+            app.after(50, step)
+            return
+        win = tops[-1]
+        if prepare:
+            prepare(win)
+        app.after(500, lambda: press_ok(win))  # az előnézet 300 ms után frissül
+
+    app.after(50, step)
