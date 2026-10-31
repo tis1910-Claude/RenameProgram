@@ -1,7 +1,8 @@
-"""Media Renamer Pro 4.1
+"""Media Renamer Pro 4.2
 
 Képek és videók csoportos átnevezése a felvétel dátuma és egy téma alapján,
-opcionálisan közös (dátum_téma) mappába mozgatva.
+opcionálisan közös (dátum_téma) mappába mozgatva, vagy napok szerint
+ÉÉÉÉ-HH-NN mappákba rendezve.
 
 Kötelező függőség: Pillow.
 Opcionális: tkinterdnd2 (fogd és vidd), python-vlc + VLC (beépített lejátszó),
@@ -44,7 +45,7 @@ try:
 except Exception:
     send2trash = None
 
-APP_NAME = "Media Renamer Pro 4.1"
+APP_NAME = "Media Renamer Pro 4.2"
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp")
 VIDEO_EXTS = (".mp4", ".mov", ".avi", ".mkv", ".m4v", ".3gp", ".mts")
 MEDIA_EXTS = IMAGE_EXTS + VIDEO_EXTS
@@ -124,9 +125,9 @@ TEXTS = {
         "success": "Siker",
         "error": "Hiba",
         "info": "Info",
-        "undo_none": "Nincs visszavonható átnevezés.",
-        "undo_confirm": "Visszavonod az utolsó átnevezést ({n} fájl)?",
-        "undo_done": "{n} fájl visszanevezve.",
+        "undo_none": "Nincs visszavonható művelet.",
+        "undo_confirm": "Visszavonod az utolsó átnevezést/áthelyezést ({n} fájl)?",
+        "undo_done": "{n} fájl visszaállítva.",
         "delete_confirm_title": "Törlés megerősítése",
         "delete_confirm_trash": "Biztosan a lomtárba helyezed a {n} kijelölt fájlt?",
         "delete_confirm_perm": ("A send2trash modul nincs telepítve, ezért a törlés VÉGLEGES lesz!\n"
@@ -138,6 +139,22 @@ TEXTS = {
         "video_error": "Videólejátszási hiba: {err}",
         "player_title": "Videólejátszó - {name}",
         "open_error": "Hiba a megnyitáskor: {err}",
+        "btn_daysort": "Rendezés napok szerint",
+        "daysort_all": "Nincs kijelölt fájl. Rendezed mind a {n} betöltött fájlt?",
+        "daysort_title": "Rendezés napok szerint - előnézet",
+        "daysort_summary": ("{n} fájl kerül át {d} napi mappába (ÉÉÉÉ-HH-NN) ide: {folder}\n"
+                            "Ebből {new} mappa új. Már a helyén van: {in_place} fájl."),
+        "daysort_file_dates": ("{n} fájlban nincs beágyazott felvételi dátum, "
+                               "ezeknél a fájl dátuma lesz használva (jelölés: *)."),
+        "daysort_include_file": "Metaadat nélküli fájlok áthelyezése is (fájldátum alapján)",
+        "daysort_col_day": "Nap",
+        "daysort_col_file": "Fájl",
+        "daysort_col_new": "Új név",
+        "daysort_nothing": "Nincs áthelyezendő fájl: mind a megfelelő napi mappában van.",
+        "daysort_moving": "Áthelyezés... {i}/{n}",
+        "daysort_done": "{n} fájl áthelyezve {d} napi mappába.",
+        "daysort_undo_hint": "Visszavonás: Szerkesztés → Visszavonás (Ctrl+Z).",
+        "daysort_errors": "{n} fájl nem helyezhető át:\n",
     },
     "en": {
         "ready": "Ready",
@@ -188,8 +205,8 @@ TEXTS = {
         "error": "Error",
         "info": "Info",
         "undo_none": "Nothing to undo.",
-        "undo_confirm": "Undo the last rename ({n} files)?",
-        "undo_done": "{n} files renamed back.",
+        "undo_confirm": "Undo the last rename/move ({n} files)?",
+        "undo_done": "{n} files restored.",
         "delete_confirm_title": "Confirm delete",
         "delete_confirm_trash": "Move the {n} selected files to the recycle bin?",
         "delete_confirm_perm": ("send2trash is not installed, so deletion will be PERMANENT!\n"
@@ -201,6 +218,22 @@ TEXTS = {
         "video_error": "Video playback error: {err}",
         "player_title": "Video player - {name}",
         "open_error": "Error while opening: {err}",
+        "btn_daysort": "Sort by day",
+        "daysort_all": "No files selected. Sort all {n} loaded files?",
+        "daysort_title": "Sort by day - preview",
+        "daysort_summary": ("{n} files will be moved into {d} day folders (YYYY-MM-DD) in: {folder}\n"
+                            "{new} of the folders are new. Already in place: {in_place} files."),
+        "daysort_file_dates": ("{n} files have no embedded capture date; "
+                               "their file date will be used (marked with *)."),
+        "daysort_include_file": "Also move files without metadata (by file date)",
+        "daysort_col_day": "Day",
+        "daysort_col_file": "File",
+        "daysort_col_new": "New name",
+        "daysort_nothing": "Nothing to move: all files are already in the right day folder.",
+        "daysort_moving": "Moving... {i}/{n}",
+        "daysort_done": "{n} files moved into {d} day folders.",
+        "daysort_undo_hint": "Undo: Edit → Undo (Ctrl+Z).",
+        "daysort_errors": "{n} files could not be moved:\n",
     },
 }
 
@@ -457,6 +490,64 @@ def scan_media(folder, recursive=True):
         files = [os.path.join(folder, n) for n in sorted(os.listdir(folder))
                  if is_media(n) and os.path.isfile(os.path.join(folder, n))]
     return files
+
+
+# ---------------------------------------------------------------------------
+# Rendezés napok szerint: base/ÉÉÉÉ-HH-NN/eredeti_név (GUI-független)
+# ---------------------------------------------------------------------------
+def day_folder(base_folder, dt):
+    return os.path.join(base_folder, dt.strftime("%Y-%m-%d"))
+
+
+def plan_day_sort(items, base_folder, exists=os.path.exists):
+    """items: [(útvonal, datetime)] -> (terv [(régi, új)], már a helyén lévők száma).
+    A fájlnév marad; ütközéskor _1, _2... kerül a név végére. A már a helyes
+    napi mappában lévő fájlok kimaradnak a tervből."""
+    reserved = set()
+    plan, in_place = [], 0
+    for path, dt in sorted(items, key=lambda it: (it[1], it[0])):
+        folder = day_folder(base_folder, dt)
+        if _key(os.path.dirname(path)) == _key(folder):
+            in_place += 1
+            reserved.add(_key(path))
+            continue
+        stem, ext = os.path.splitext(os.path.basename(path))
+        counter = 0
+        while True:
+            name = f"{stem}_{counter}{ext}" if counter else stem + ext
+            new_path = os.path.join(folder, name)
+            k = _key(new_path)
+            if k not in reserved and not exists(new_path):
+                break
+            counter += 1
+        reserved.add(k)
+        plan.append((path, new_path))
+    return plan, in_place
+
+
+def execute_day_sort(plan, progress=None):
+    """Létrehozza a hiányzó napi mappákat, majd áthelyez (felülírás nélkül).
+    Vissza: (kész [(régi, új)], hibák, létrehozott mappák)."""
+    created, errors = [], []
+    for folder in sorted({os.path.dirname(new) for _, new in plan}):
+        if not os.path.isdir(folder):
+            try:
+                os.makedirs(folder)
+                created.append(folder)
+            except OSError as e:
+                errors.append(f"{os.path.basename(folder)}: {e}")
+    done, _, move_errors = execute_plan(plan, progress)
+    return done, errors + move_errors, created
+
+
+def remove_empty_folders(folders):
+    """A visszavonás után üresen maradt (általunk létrehozott) mappák törlése."""
+    for folder in sorted(folders, key=len, reverse=True):
+        try:
+            if os.path.isdir(folder) and not os.listdir(folder):
+                os.rmdir(folder)
+        except OSError:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -755,12 +846,17 @@ class ImageRenamerGUI(_BaseTk):
         self.files = []
         self.prev_suffixes = self.settings.recent_suffixes
         self.last_rename = []  # [(régi, új)] a visszavonáshoz
-        self.last_created_folder = None
+        self.last_created_folders = []  # a visszavonáskor törlendő, általunk létrehozott mappák
         self.busy = False
         self.running = True
         self.folder = ""
         self.async_loader = AsyncThumbnailLoader()
         self.async_loader.start()
+
+        self.daysort_button = tk.Button(self.btn_frame, text=self.t("btn_daysort"), image=self.icons["folder"],
+                                        compound="left", padx=4, command=self.sort_by_day)
+        self.daysort_button.pack(side=tk.LEFT, padx=2)
+        self.action_buttons.append(self.daysort_button)
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         if HAS_DND:
@@ -846,6 +942,7 @@ class ImageRenamerGUI(_BaseTk):
         menu.add_cascade(label=self.t("menu_settings"), menu=config_menu)
         edit_menu = tk.Menu(menu, tearoff=0)
         edit_menu.add_command(label=self.t("btn_undo"), accelerator="Ctrl+Z", command=self.undo_last)
+        edit_menu.add_command(label=self.t("btn_daysort"), command=self.sort_by_day)
         menu.add_cascade(label=self.t("menu_edit"), menu=edit_menu)
         self.config(menu=menu)
 
@@ -1079,7 +1176,7 @@ class ImageRenamerGUI(_BaseTk):
     def _rename_finished(self, r):
         if r["done"]:
             self.last_rename = r["done"]
-            self.last_created_folder = r["created"]
+            self.last_created_folders = [r["created"]] if r["created"] else []
         lines = [self.t("renamed", n=len(r["done"]))
                  + (self.t("moved_to", folder=r["target"]) if r["target"] else "")]
         if r["unchanged"]:
@@ -1102,20 +1199,153 @@ class ImageRenamerGUI(_BaseTk):
         if not messagebox.askyesno(self.t("btn_undo"), self.t("undo_confirm", n=len(self.last_rename))):
             return
         reverse_plan = [(new, old) for old, new in reversed(self.last_rename)]
-        created = self.last_created_folder
+        created = self.last_created_folders
 
         def work():
             done, _, errors = execute_plan(reverse_plan)
-            if created and os.path.isdir(created) and not os.listdir(created):
-                os.rmdir(created)
+            remove_empty_folders(created)
             return done, errors
 
         def finished(result):
             done, errors = result
-            self.last_rename, self.last_created_folder = [], None
+            self.last_rename, self.last_created_folders = [], []
             msg = self.t("undo_done", n=len(done))
             if errors:
                 self.show_error(msg + "\n\n" + self.t("rename_errors", n=len(errors)) + "\n".join(errors[:20]))
+            else:
+                self.show_info(self.t("success"), msg)
+            self.load_media()
+
+        self.run_in_background(work, finished)
+
+    # --- rendezés napok szerint --------------------------------------------
+    def sort_by_day(self):
+        """A kijelölt (vagy ha nincs kijelölés, az összes) fájl áthelyezése ÉÉÉÉ-HH-NN mappákba
+        a betöltött mappán belül. Előnézet után fut, és visszavonható."""
+        if self.busy:
+            self.show_info(self.t("info"), self.t("busy"))
+            return
+        if not self.folder:
+            self.show_info(self.t("info"), self.t("no_folder"))
+            return
+        selected = self.selected_paths()
+        if not selected:
+            if not self.files:
+                messagebox.showinfo(self.t("none_selected_title"), self.t("none_selected"))
+                return
+            if not messagebox.askyesno(self.t("btn_daysort"), self.t("daysort_all", n=len(self.files))):
+                return
+            selected = list(self.files)
+        base_folder = self.folder
+
+        def work():
+            items = []
+            for i, path in enumerate(selected, 1):
+                self.call_in_ui(self.set_status, self.t("reading_dates", i=i, n=len(selected)))
+                dt, source = get_media_datetime(path)
+                items.append((path, dt, source))
+            return items
+
+        # Az előnézet saját eseményhurkot futtat, ezért ne a UI-sor feldolgozásán belül nyíljon meg
+        self.run_in_background(work, lambda items: self.after(0, self._daysort_preview, base_folder, items))
+
+    def _daysort_preview(self, base_folder, items):
+        self.set_status(self.t("ready"))
+        file_dated = {path for path, _, source in items if source == "file"}
+        dates = {path: dt for path, dt, _ in items}
+        include_var = tk.BooleanVar(value=True)
+        result = {"ok": False}
+
+        win = tk.Toplevel(self)
+        win.title(self.t("daysort_title"))
+        win.transient(self)
+        win.geometry("760x480")
+        summary = tk.Label(win, justify=tk.LEFT, anchor="w", wraplength=720)
+        summary.pack(fill=tk.X, padx=10, pady=(10, 4))
+        if file_dated:
+            tk.Label(win, text=self.t("daysort_file_dates", n=len(file_dated)), justify=tk.LEFT,
+                     anchor="w", wraplength=720, fg="#a05000").pack(fill=tk.X, padx=10)
+            ttk.Checkbutton(win, text=self.t("daysort_include_file"), variable=include_var,
+                            command=lambda: refresh()).pack(anchor="w", padx=10, pady=4)
+
+        tree_frame = tk.Frame(win)
+        tree_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=4)
+        tree = ttk.Treeview(tree_frame, columns=("file", "new"), show="tree headings")
+        tree.heading("#0", text=self.t("daysort_col_day"))
+        tree.heading("file", text=self.t("daysort_col_file"))
+        tree.heading("new", text=self.t("daysort_col_new"))
+        tree.column("#0", width=150, stretch=False)
+        scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=scroll.set)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        bottom = tk.Frame(win)
+        bottom.pack(pady=10)
+        ok_btn = ttk.Button(bottom, text=self.t("ok"))
+        ok_btn.pack(side=tk.LEFT, padx=4)
+        ttk.Button(bottom, text=self.t("cancel"), command=win.destroy).pack(side=tk.LEFT, padx=4)
+
+        state = {}
+
+        def refresh():
+            chosen = [(p, dt) for p, dt in dates.items() if include_var.get() or p not in file_dated]
+            plan, in_place = plan_day_sort(chosen, base_folder)
+            state["plan"] = plan
+            tree.delete(*tree.get_children())
+            days = {}
+            for old, new in plan:
+                folder = os.path.dirname(new)
+                if folder not in days:
+                    label = os.path.basename(folder) + ("" if os.path.isdir(folder) else " (+)")
+                    days[folder] = tree.insert("", tk.END, text=label, open=len(plan) <= 200)
+                mark = " *" if old in file_dated else ""
+                tree.insert(days[folder], tk.END, values=(os.path.relpath(old, base_folder) + mark,
+                                                          os.path.basename(new)))
+            new_folders = sum(1 for f in days if not os.path.isdir(f))
+            summary.config(text=self.t("daysort_summary", n=len(plan), d=len(days), folder=base_folder,
+                                       new=new_folders, in_place=in_place))
+            ok_btn.state(["!disabled"] if plan else ["disabled"])
+
+        def accept():
+            if state.get("plan"):
+                result["ok"] = True
+                win.destroy()
+
+        ok_btn.config(command=accept)
+        win.bind("<Return>", lambda e: accept())
+        win.bind("<Escape>", lambda e: win.destroy())
+        refresh()
+        win.focus_set()
+        if not state["plan"]:
+            win.destroy()
+            self.show_info(self.t("info"), self.t("daysort_nothing"))
+            return
+        win.grab_set()
+        self.wait_window(win)
+        if result["ok"]:
+            self._daysort_run(state["plan"])
+
+    def _daysort_run(self, plan):
+        self.close_video_player()  # Windowson a lejátszott fájl nem mozgatható
+
+        def work():
+            return execute_day_sort(
+                plan, lambda i, n: self.call_in_ui(self.set_status, self.t("daysort_moving", i=i, n=n)))
+
+        def finished(result):
+            done, errors, created = result
+            if done:
+                self.last_rename = done
+                self.last_created_folders = created
+            else:
+                remove_empty_folders(created)
+            days = len({os.path.dirname(new) for _, new in done})
+            msg = self.t("daysort_done", n=len(done), d=days)
+            if done:
+                msg += "\n\n" + self.t("daysort_undo_hint")
+            if errors:
+                self.show_error(msg + "\n\n" + self.t("daysort_errors", n=len(errors)) + "\n".join(errors[:20]))
             else:
                 self.show_info(self.t("success"), msg)
             self.load_media()

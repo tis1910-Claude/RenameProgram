@@ -89,3 +89,47 @@ ini = os.path.join(d, "cfg", "settings.ini")
 s = m.SettingsManager(ini); s.recent_suffixes=["Balaton","Esküvő"]; s.save_settings()
 ok(m.SettingsManager(ini).recent_suffixes==["Balaton","Esküvő"], "témák mentése/visszaolvasása (ékezettel)")
 shutil.rmtree(d)
+
+# rendezés napok szerint
+d = tempfile.mkdtemp()
+sub = os.path.join(d, "regi_mappa"); os.makedirs(sub)
+jpg(os.path.join(d, "a.jpg"), "2023:07:15 10:20:30")
+jpg(os.path.join(sub, "a.jpg"), "2023:07:15 11:00:00")          # azonos név másik mappából
+jpg(os.path.join(sub, "c.jpg"), "2023:07:14 08:00:00")
+ex = Image.Exif(); ex.get_ifd(0x8769)[0x9003] = "2022:01:02 03:04:05"
+Image.new("RGB",(50,50)).save(os.path.join(d, "p.png"), exif=ex.tobytes())
+Image.new("RGB",(50,50)).save(os.path.join(d, "noexif.jpg"))
+ff(os.path.join(d,"late.mp4"), 1, "2023-07-15T23:30:00Z")          # UTC: helyi időben más nap lehet
+jpg(os.path.join(d, "2023-07-14_kesz.jpg"), "2023:07:14 09:00:00")
+os.makedirs(os.path.join(d, "2023-07-14"))
+shutil.move(os.path.join(d, "2023-07-14_kesz.jpg"), os.path.join(d, "2023-07-14", "kesz.jpg"))
+
+files = m.scan_media(d, True)
+items = [(f, m.get_media_datetime(f)[0]) for f in files]
+blocker = os.path.join(d, "2023-07-15", "a.jpg")                      # a beolvasás után kerül oda
+os.makedirs(os.path.dirname(blocker)); open(blocker, "w").write("ne írd felül")
+plan, in_place = m.plan_day_sort(items, d)
+new = dict(plan)
+ok(in_place == 1, f"a már helyén lévő fájl kimarad ({in_place})")
+ok(len(plan) == len(files) - 1, f"terv mérete {len(plan)}")
+ok(os.path.dirname(new[os.path.join(sub, "c.jpg")]) == os.path.join(d, "2023-07-14"), "almappából is rendez")
+ok(new[os.path.join(d, "p.png")].endswith(os.path.join("2022-01-02", "p.png")), "PNG EXIF dátum")
+vday = m.parse_iso_datetime("2023-07-15T23:30:00Z").strftime("%Y-%m-%d")
+ok(os.path.dirname(new[os.path.join(d, "late.mp4")]) == os.path.join(d, vday), f"videó helyi idő szerinti nap: {vday}")
+ok(os.path.join(d, "noexif.jpg") in new, "metaadat nélküli fájl is (fájldátum)")
+names15 = sorted(os.path.basename(new[p]) for p in (os.path.join(d, "a.jpg"), os.path.join(sub, "a.jpg")))
+ok(names15 == ["a_1.jpg", "a_2.jpg"], f"ütközés: létezőt nem ír felül, egymást sem: {names15}")
+done, errors, created = m.execute_day_sort(plan)
+ok(len(done) == len(plan) and not errors, f"áthelyezés {len(done)} {errors}")
+ok(open(blocker).read() == "ne írd felül", "meglévő fájl érintetlen")
+ok(os.path.join(d, "2023-07-15") not in created and os.path.join(d, "2022-01-02") in created, "létrehozott mappák listája")
+plan_again, _ = m.plan_day_sort([(f, m.get_media_datetime(f)[0]) for f in m.scan_media(d, True)
+                                 if f != blocker], d)
+ok(plan_again == [], f"második futás nem mozgat semmit ({len(plan_again)})")
+back, _, errb = m.execute_plan([(n, o) for o, n in reversed(done)])
+m.remove_empty_folders(created)
+ok(len(back) == len(done) and not errb, "visszavonás")
+ok(all(not os.path.exists(c) for c in created) and os.path.isdir(os.path.join(d, "2023-07-15")),
+   "visszavonás után az általunk létrehozott üres mappák törölve, a régiek maradnak")
+ok(sorted(f for f in m.scan_media(d, True) if f != blocker) == sorted(files), "minden fájl az eredeti helyén")
+shutil.rmtree(d)
