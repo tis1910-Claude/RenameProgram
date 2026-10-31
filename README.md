@@ -14,6 +14,10 @@ Példa: `IMG_1234.jpg` → `2024-05-01_14-30-00_Balaton.jpg`
   fotóknál is, így egy külföldi út fotói és videói ugyanarra az órára és napra esnek. A csak UTC-t tartalmazó
   videóknál (`creation_time`) a gép helyi ideje lesz használva.
 - A macOS által pendrive-ra/SD-kártyára írt `._` kezdetű kísérőfájlokat a program kihagyja.
+- Fájltípusok: JPEG, PNG, TIFF, WebP, **HEIC/HEIF** (iPhone, a `pillow-heif` csomaggal), **RAW** (DNG, CR2, CR3, NEF,
+  ARW, ORF, RW2, RAF, PEF, SRW; dátum az `exifread`, bélyegkép a `rawpy` csomaggal), videók: MP4, MOV, M4V, 3GP, AVI, MKV, MTS.
+- Az MP4/MOV/M4V/3GP videók dátumát a program ffmpeg nélkül, maga olvassa ki a fájl fejlécéből (gyorsabb is).
+  Az ffprobe csak az AVI/MKV/MTS fájlokhoz és a videós bélyegképekhez kell.
 - Testreszabható névsablon (*Beállítások → Átnevezési sablonok*):
   `{date}` `{day}` `{time}` `{suffix}` `{seq}` `{original}` `{counter}`
 - Ütközésvédelem: létező fájlt soha nem ír felül
@@ -40,7 +44,7 @@ Példa: `IMG_1234.jpg` → `2024-05-01_14-30-00_Balaton.jpg`
    ```
    pip install -r requirements.txt
    ```
-3. Videókhoz: [ffmpeg](https://ffmpeg.org/download.html) (`ffmpeg` és `ffprobe` legyen a PATH-on).
+3. Videós bélyegképekhez és AVI/MKV/MTS dátumhoz: [ffmpeg](https://ffmpeg.org/download.html) (`ffmpeg` és `ffprobe` legyen a PATH-on).
 4. Beépített lejátszóhoz: [VLC](https://www.videolan.org/vlc/) (a `python-vlc` bitszáma egyezzen a VLC-ével).
 
 Az ikonok (`folder.png`, `rename.png`, `refresh.png`, `unmark.png`, `MarkAll.png`, `delete.png`, `exit.png`, `media.png`)
@@ -77,7 +81,7 @@ Kézzel:
 
 ```
 pip install pyinstaller
-pyinstaller --noconsole --onefile --add-data "*.png;." --collect-data sv_ttk --collect-all tkinterdnd2 --hidden-import PIL._tkinter_finder Keprename5video.py
+pyinstaller --noconsole --onefile --add-data "*.png;." --collect-data sv_ttk --collect-all tkinterdnd2 --collect-all pillow_heif --collect-all rawpy --hidden-import PIL._tkinter_finder Keprename5video.py
 ```
 A `--collect-data sv_ttk` a Sun Valley megjelenés fájljait, a `--collect-all tkinterdnd2` a fogd és vidd
 programkönyvtárát csomagolja be. Amelyik csomag nincs telepítve, annak a kapcsolóját hagyd el.
