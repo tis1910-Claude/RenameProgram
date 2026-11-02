@@ -241,7 +241,7 @@ TEXTS = {
         "feat_rename": "Fájlok átnevezése",
         "feat_rename_desc": "Dátum és téma alapján",
         "feat_daysort_desc": "ÉÉÉÉ-HH-NN mappákba",
-        "feat_duplicates_desc": "Azonos tartalmú fájlok",
+        "feat_duplicates_desc": "Tartalom vagy EXIF alapján",
         "guide_title": "Útmutató",
         "guide_run": "▶  Indítás",
         "guide_step_folder": "1. Válassz ki egy mappát: „Mappa kiválasztása” gomb lent, vagy húzd ide a mappát.",
@@ -260,11 +260,20 @@ TEXTS = {
                          "4. Az előnézetben ellenőrizd az új neveket (ha a gép órája rosszul járt, itt "
                          "eltolhatod az időt), majd OK.\n"
                          "Visszavonás: Ctrl+Z."),
-        "guide_duplicates": ("1. Jelöld ki a vizsgálandó fájlokat, vagy ne jelölj ki semmit: ekkor az összes látható "
-                             "fájlt átnézi.\n"
-                             "2. Kattints az Indítás gombra.\n"
-                             "3. A találatoknál a „Másolatok kijelölése” gomb kijelöli a fölösleges példányokat, "
-                             "a Törlés gomb pedig lomtárba teszi őket."),
+        "guide_duplicates": ("Pipáld be, mi alapján keressen, jelölj ki fájlokat (vagy semmit: akkor mindet nézi), "
+                             "majd Indítás. A találatoknál „Másolatok kijelölése”, végül Törlés (lomtárba)."),
+        "dup_crit_title": "Mi alapján keressen?",
+        "dup_crit_content": "Fájltartalom (bájtra azonos)",
+        "dup_crit_datetime": "EXIF felvételi idő (ezredmp.)",
+        "dup_crit_unique_id": "ImageUniqueID (ha van)",
+        "dup_crit_camera": "Gép típusa + sorozatszám",
+        "dup_crit_hint": "Több pipa = szigorúbb: mindnek egyeznie kell. Akiből hiányzik az adat, kimarad.",
+        "dup_crit_none": "Pipálj be legalább egy szempontot (Duplikátumok keresése a funkciópanelen).",
+        "dup_criteria_used": "Szempontok: {names}.",
+        "dup_missing": "{n} fájl kimaradt, mert hiányzik belőle egy bepipált adat (pl. EXIF felvételi idő).",
+        "dup_summary_meta": ("{g} csoportban {n} fölösleges példány ({mb:.1f} MB). Fájltartalom nélkül ezek ugyanannak a "
+                             "felvételnek a példányai, de méretük és minőségük eltérhet: csoportonként a legnagyobb "
+                             "fájl a megtartandó. A „Másolatok kijelölése” csak kijelöl, a törlés a Törlés gombbal történik."),
         "daysort_all": "Nincs kijelölt fájl. Rendezed mind a {n} betöltött fájlt?",
         "daysort_title": "Rendezés napok szerint - előnézet",
         "daysort_summary": ("{n} fájl kerül át {d} napi mappába (ÉÉÉÉ-HH-NN) ide: {folder}\n"
@@ -404,7 +413,7 @@ TEXTS = {
         "feat_rename": "Rename files",
         "feat_rename_desc": "By date and topic",
         "feat_daysort_desc": "Into YYYY-MM-DD folders",
-        "feat_duplicates_desc": "Files with identical content",
+        "feat_duplicates_desc": "By content or EXIF data",
         "guide_title": "Guide",
         "guide_run": "▶  Start",
         "guide_step_folder": "1. Choose a folder: the “Select folder” button below, or drop a folder here.",
@@ -423,10 +432,20 @@ TEXTS = {
                          "4. Check the new names in the preview (shift the time here if the camera clock was "
                          "wrong), then OK.\n"
                          "Undo: Ctrl+Z."),
-        "guide_duplicates": ("1. Select the files to check, or select nothing to check all visible files.\n"
-                             "2. Click Start.\n"
-                             "3. In the results, “Select copies” selects the spare copies and the Delete button "
-                             "moves them to the recycle bin."),
+        "guide_duplicates": ("Tick what to compare, select files (or nothing to check all), then Start. "
+                             "In the results use “Select copies”, then Delete (recycle bin)."),
+        "dup_crit_title": "Compare by",
+        "dup_crit_content": "File content (byte-identical)",
+        "dup_crit_datetime": "EXIF capture time (ms)",
+        "dup_crit_unique_id": "ImageUniqueID (if present)",
+        "dup_crit_camera": "Camera model + serial",
+        "dup_crit_hint": "More ticks = stricter: all must match. Files lacking the data are skipped.",
+        "dup_crit_none": "Tick at least one criterion (Find duplicates in the function panel).",
+        "dup_criteria_used": "Criteria: {names}.",
+        "dup_missing": "{n} files were skipped because they lack a ticked field (e.g. EXIF capture time).",
+        "dup_summary_meta": ("{n} redundant copies in {g} groups ({mb:.1f} MB). Without file content these are copies of "
+                             "the same shot that may differ in size and quality: the largest file in each group is kept. "
+                             "\"Select copies\" only selects them; delete them with the Delete button."),
         "daysort_all": "No files selected. Sort all {n} loaded files?",
         "daysort_title": "Sort by day - preview",
         "daysort_summary": ("{n} files will be moved into {d} day folders (YYYY-MM-DD) in: {folder}\n"
@@ -1378,8 +1397,97 @@ def find_duplicates(paths, progress=None):
             groups += [b for b in buckets.values() if len(b) > 1]
         if progress:
             progress(i, len(candidates))
-    keep_first = lambda p: (p.count(os.sep), len(p), p.casefold())
-    return sorted((sorted(g, key=keep_first) for g in groups), key=lambda g: keep_first(g[0]))
+    return sorted((sorted(g, key=_keep_first) for g in groups), key=lambda g: _keep_first(g[0]))
+
+
+def _keep_first(path):
+    """A megtartandó példány: a legfelső mappában lévő, azon belül a rövidebb nevű, majd ábécé szerint."""
+    return path.count(os.sep), len(path), path.casefold()
+
+
+# Duplikátumkeresés szempontjai. A "content" (méret -> SHA-1 -> bájtra azonos) biztos egyezés; a többi EXIF-adat.
+DUP_CRITERIA = ("content", "datetime", "unique_id", "camera")
+DEFAULT_DUP_CRITERIA = ("content",)
+_TAG_SUBSEC_ORIGINAL = 0x9291
+_TAG_IMAGE_UNIQUE_ID = 0xA420
+_TAG_BODY_SERIAL = 0xA431
+_TAG_MAKE, _TAG_MODEL = 0x010F, 0x0110
+
+
+def _exif_text(value):
+    if isinstance(value, bytes):
+        value = value.decode("ascii", "ignore")
+    return str(value).replace("\x00", "").strip() if value is not None else ""
+
+
+def read_dup_metadata(path):
+    """A duplikátumkereséshez használt EXIF-adatok; ami nincs a fájlban, az None.
+
+    datetime:  felvételi idő ezredmásodpercig ("2023:07:15 10:20:30.450"); ha a gép nem ír
+               tizedmásodpercet (SubSecTimeOriginal), akkor csak másodpercig
+    unique_id: ImageUniqueID (csak egyes gépek írják)
+    camera:    gyártó + típus + (ha van) a gép sorozatszáma
+    """
+    meta = {"datetime": None, "unique_id": None, "camera": None}
+    try:
+        with Image.open(path) as img:
+            exif = img.getexif()
+    except Exception:
+        return meta
+    ifd = exif.get_ifd(_EXIF_IFD)
+    dt = _exif_text(ifd.get(_TAG_DATETIME_ORIGINAL) or ifd.get(_TAG_DATETIME_DIGITIZED))
+    if _parse_exif_datetime(dt):
+        sub = _exif_text(ifd.get(_TAG_SUBSEC_ORIGINAL))
+        meta["datetime"] = dt[:19] + ("." + (sub + "00")[:3] if sub.isdigit() else "")
+    uid = _exif_text(ifd.get(_TAG_IMAGE_UNIQUE_ID))
+    if uid.strip("0"):  # a csupa nulla „azonosító” nem azonosít semmit
+        meta["unique_id"] = uid
+    make, model = _exif_text(exif.get(_TAG_MAKE)), _exif_text(exif.get(_TAG_MODEL))
+    if make or model:
+        serial = _exif_text(ifd.get(_TAG_BODY_SERIAL))
+        meta["camera"] = " ".join(x for x in (make, model, serial) if x)
+    return meta
+
+
+def find_duplicates_by(paths, criteria, progress=None, meta_reader=read_dup_metadata):
+    """Duplikátumcsoportok a megadott szempontok szerint; minden szempontnak egyeznie kell (ÉS).
+
+    Visszaad: (csoportok, kimaradt), ahol kimaradt azoknak a fájloknak a listája, amelyekből hiányzik
+    valamelyik kiválasztott EXIF-adat (ezek semmivel sem egyeznek). Fájltartalom nélkül a csoport első
+    eleme a legnagyobb fájl (feltehetően a legjobb minőségű példány)."""
+    criteria = [c for c in DUP_CRITERIA if c in criteria]
+    if not criteria:
+        raise ValueError("Legalább egy szempont kell")
+    meta_keys = [c for c in criteria if c != "content"]
+    missing = []
+    if meta_keys:
+        keyed = {}
+        for i, p in enumerate(paths, 1):
+            meta = meta_reader(p)
+            key = tuple(meta.get(k) for k in meta_keys)
+            if None in key:
+                missing.append(p)
+            else:
+                keyed.setdefault(key, []).append(p)
+            if progress and (i % 20 == 0 or i == len(paths)):
+                progress(i, len(paths))
+        candidates = [g for g in keyed.values() if len(g) > 1]
+    else:
+        candidates = [list(paths)]
+    if "content" in criteria:
+        groups = []
+        for g in candidates:
+            groups += find_duplicates(g, progress if not meta_keys else None)
+        return sorted(groups, key=lambda g: _keep_first(g[0])), missing
+
+    def size(p):
+        try:
+            return os.path.getsize(p)
+        except OSError:
+            return -1
+
+    groups = [sorted(g, key=lambda p: (-size(p),) + _keep_first(p)) for g in candidates]
+    return sorted(groups, key=lambda g: _keep_first(g[0])), missing
 
 
 # ---------------------------------------------------------------------------
@@ -1634,19 +1742,22 @@ class Feature:
     key:     azonosító (ikon, teszt), title/desc: szövegkulcsok a TEXTS-ben,
     method:  az ImageRenamerGUI metódusának neve, amit az Indítás gomb meghív,
     color:   az ikon csempéjének színe,
-    guide:   az útmutató szövegkulcsa (alapból "guide_<key>"), ezt mutatja a panel a funkció kiválasztása után.
+    guide:   az útmutató szövegkulcsa (alapból "guide_<key>"), ezt mutatja a panel a funkció kiválasztása után,
+    options: (nem kötelező) metódusnév; a kapott keret (pl. pipák) az útmutató alatt jelenik meg.
     Új funkció = egy új Feature a FEATURES listában + "guide_<key>" szöveg + (ha kell) rajzoló a FEATURE_ICONS-ban.
     """
 
-    def __init__(self, key, title, desc, method, color, guide=None):
+    def __init__(self, key, title, desc, method, color, guide=None, options=None):
         self.key, self.title, self.desc, self.method, self.color = key, title, desc, method, color
         self.guide = guide or "guide_" + key
+        self.options = options  # opcionális: az ImageRenamerGUI metódusa, amely a beállításai keretét építi
 
 
 FEATURES = [
     Feature("daysort", "btn_daysort", "feat_daysort_desc", "sort_by_day", "#16a34a"),
     Feature("rename", "feat_rename", "feat_rename_desc", "rename_selected", "#2563eb"),
-    Feature("duplicates", "menu_duplicates", "feat_duplicates_desc", "find_duplicates_ui", "#d97706"),
+    Feature("duplicates", "menu_duplicates", "feat_duplicates_desc", "find_duplicates_ui", "#d97706",
+            options="_build_dup_options"),
 ]
 FEATURE_BY_KEY = {f.key: f for f in FEATURES}
 
@@ -1891,6 +2002,8 @@ class ThumbGrid(tk.Frame):
         self.on_selection_change()
         self.on_open(path)
 
+    wheel_redirect = None  # opcionális függvény(event) -> True, ha az eseményt más terület kezelte
+
     def bind_mousewheel(self, widget):
         if IS_WINDOWS or IS_MAC:
             widget.bind_all("<MouseWheel>", self._on_mousewheel)
@@ -1905,6 +2018,8 @@ class ThumbGrid(tk.Frame):
                 return
         except Exception:
             return
+        if self.wheel_redirect and self.wheel_redirect(event):
+            return  # más terület (pl. a funkciópanel) fölött görgetett
         if IS_WINDOWS:
             # Érintőpadon a delta 120-nál kisebb is lehet: legalább egy lépés legyen
             step = -event.delta / 120
@@ -1940,7 +2055,7 @@ class SettingsManager:
         self.config.read([legacy, self.config_file], encoding="utf-8")
         for section, defaults in (
                 ('UI', {'theme': DEFAULT_APPEARANCE, 'language': 'hu', 'recursive': 'yes', 'last_folder': '',
-                        'move_base': ''}),
+                        'move_base': '', 'dup_criteria': ",".join(DEFAULT_DUP_CRITERIA)}),
                 ('Naming', {'pattern': DEFAULT_PATTERN, 'recent_suffixes': '[]', 'place': 'no'})):
             if not self.config.has_section(section):
                 self.config.add_section(section)
@@ -1995,6 +2110,16 @@ class SettingsManager:
     @move_base.setter
     def move_base(self, folder):
         self.config['UI']['move_base'] = folder
+
+    @property
+    def dup_criteria(self):
+        """A duplikátumkeresés bepipált szempontjai (ismeretlen vagy üres érték helyett az alapértelmezett)."""
+        chosen = [c for c in DUP_CRITERIA if c in self.config['UI']['dup_criteria'].split(",")]
+        return chosen or list(DEFAULT_DUP_CRITERIA)
+
+    @dup_criteria.setter
+    def dup_criteria(self, values):
+        self.config['UI']['dup_criteria'] = ",".join(c for c in DUP_CRITERIA if c in values)
 
     @property
     def recent_suffixes(self):
@@ -2190,11 +2315,23 @@ class ImageRenamerGUI(_BaseTk):
     def _build_feature_panel(self):
         """A bal oldali funkcióválasztó: a FEATURES lista minden eleméből egy ikonos gomb
         (cím + rövid leírás). Új funkcióhoz elég a FEATURES listát bővíteni."""
-        panel = self.feature_panel
+        # Görgethető belső rész (alacsony ablakban se lógjon ki semmi); az állapotsor és az Indítás gomb
+        # alul, a görgetésen kívül, mindig látható
+        outer = self.feature_panel
+        self._panel_canvas = canvas = tk.Canvas(outer, highlightthickness=0, borderwidth=0, width=230)
+        self._panel_scroll = ttk.Scrollbar(outer, orient=tk.VERTICAL, command=canvas.yview)
+        canvas.configure(yscrollcommand=self._panel_scroll.set)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        panel = tk.Frame(canvas)
+        canvas.create_window((0, 0), window=panel, anchor=tk.NW)
+        panel.bind("<Configure>", lambda e: self._update_panel_scroll())
+        canvas.bind("<Configure>", lambda e: self._update_panel_scroll())
+        self.grid_view.wheel_redirect = self._panel_wheel
+        self._panel_inner = panel
         self._panel_font = tkfont.nametofont("TkDefaultFont").copy()
         size = self._panel_font.cget("size")  # negatív érték = képpont
         self._panel_font.configure(weight="bold", size=size + 1 if size > 0 else size - 1)
-        header = tk.Label(panel, text=self.t("panel_title"), anchor=tk.W, font=self._panel_font)
+        self._panel_header = header = tk.Label(panel, text=self.t("panel_title"), anchor=tk.W, font=self._panel_font)
         header.pack(side=tk.TOP, fill=tk.X, padx=10, pady=(10, 6))
         self.feature_icons = {}
         self.feature_buttons = {}
@@ -2210,6 +2347,8 @@ class ImageRenamerGUI(_BaseTk):
                             command=partial(self.select_feature, feat.key))
             btn.pack(side=tk.TOP, fill=tk.X, padx=8, pady=3)
             self.feature_buttons[feat.key] = btn
+        self.feature_options = {f.key: getattr(self, f.options)(panel) for f in FEATURES
+                                if f.options and f.key in self.feature_buttons}
 
         # Útmutató: funkció nélkül az első lépéseket mutatja, kiválasztás után az adott funkcióét
         self.active_feature = None
@@ -2218,11 +2357,62 @@ class ImageRenamerGUI(_BaseTk):
         self.guide_title.pack(side=tk.TOP, fill=tk.X, padx=10)
         self.guide_label = tk.Label(panel, anchor=tk.NW, justify=tk.LEFT, wraplength=210)
         self.guide_label.pack(side=tk.TOP, fill=tk.X, padx=10, pady=(4, 6))
-        self.guide_status = tk.Label(panel, anchor=tk.W, justify=tk.LEFT, wraplength=210)
-        self.guide_run = tk.Button(panel, text=self.t("guide_run"), padx=10, pady=4, cursor="hand2",
+        self.guide_status = tk.Label(outer, anchor=tk.W, justify=tk.LEFT, wraplength=210)
+        self.guide_run = tk.Button(outer, text=self.t("guide_run"), padx=10, pady=4, cursor="hand2",
                                    command=self.run_active_feature)
         self.action_buttons.append(self.guide_run)
         self.refresh_guide()
+
+    def _build_dup_options(self, parent):
+        """A duplikátumkeresés pipálható szempontjai (a beállításokban megjegyezve)."""
+        frame = tk.Frame(parent)
+        tk.Label(frame, text=self.t("dup_crit_title"), anchor=tk.W).pack(side=tk.TOP, fill=tk.X)
+        saved = self.settings.dup_criteria
+        self.dup_vars = {}
+        for crit in DUP_CRITERIA:
+            var = tk.BooleanVar(value=crit in saved)
+            tk.Checkbutton(frame, text=self.t("dup_crit_" + crit), variable=var, anchor=tk.W, justify=tk.LEFT,
+                           wraplength=190, command=self._on_dup_criteria).pack(side=tk.TOP, fill=tk.X)
+            self.dup_vars[crit] = var
+        self.dup_hint = tk.Label(frame, text=self.t("dup_crit_hint"), anchor=tk.W, justify=tk.LEFT, wraplength=205)
+        self.dup_hint.pack(side=tk.TOP, fill=tk.X, pady=(2, 0))
+        return frame
+
+    def _on_dup_criteria(self):
+        chosen = [c for c, v in self.dup_vars.items() if v.get()]
+        if chosen:
+            self.settings.dup_criteria = chosen
+            self.settings.save_settings()
+
+    def dup_criteria(self):
+        """A bepipált szempontok; ha a panel nincs meg, a mentett beállítás."""
+        if hasattr(self, "dup_vars"):
+            return [c for c, v in self.dup_vars.items() if v.get()]
+        return self.settings.dup_criteria
+
+    def _update_panel_scroll(self):
+        """A panel görgetési területe; a görgetősáv csak akkor látszik, ha a tartalom nem fér ki."""
+        canvas, inner = self._panel_canvas, self._panel_inner
+        canvas.configure(scrollregion=(0, 0, inner.winfo_reqwidth(), inner.winfo_reqheight()),
+                         width=inner.winfo_reqwidth())
+        need = inner.winfo_reqheight() > canvas.winfo_height() > 1
+        if need and not self._panel_scroll.winfo_ismapped():
+            self._panel_scroll.pack(side=tk.RIGHT, fill=tk.Y, before=canvas)
+        elif not need and self._panel_scroll.winfo_ismapped():
+            self._panel_scroll.pack_forget()
+            canvas.yview_moveto(0)
+
+    def _panel_wheel(self, event):
+        """Egérgörgő a funkciópanel fölött: a panelt görgeti (ha kell), nem a bélyegképrácsot."""
+        if not str(event.widget).startswith(str(self.feature_panel)):
+            return False
+        if self._panel_scroll.winfo_ismapped():
+            if IS_WINDOWS or IS_MAC:
+                step = -1 if event.delta > 0 else 1
+            else:
+                step = -1 if event.num == 4 else 1
+            self._panel_canvas.yview_scroll(step, "units")
+        return True
 
     def select_feature(self, key):
         """Funkció kiválasztása: kiemeli a gombját, és az útmutató erre a funkcióra vált."""
@@ -2246,8 +2436,8 @@ class ImageRenamerGUI(_BaseTk):
                             n=len(self.files)) if folder else self.t("guide_step_folder"))
             self.guide_title.config(text=self.t("guide_title"))
             self.guide_label.config(text=first + "\n" + self.t("guide_step_feature"))
-            self.guide_status.pack_forget()
-            self.guide_run.pack_forget()
+            for w in [self.guide_status, self.guide_run] + list(self.feature_options.values()):
+                w.pack_forget()
             return
         self.guide_title.config(text=f"{self.t('guide_title')}: {self.t(feat.title)}")
         self.guide_label.config(text=self.t(feat.guide))
@@ -2257,8 +2447,16 @@ class ImageRenamerGUI(_BaseTk):
             status = self.t("guide_need_folder")
         warn = self.colors.get("warn", "#a05000")
         self.guide_status.config(text=status, fg=self.guide_label.cget("fg") if folder else warn)
-        self.guide_status.pack(side=tk.TOP, fill=tk.X, padx=10, pady=(0, 6))
-        self.guide_run.pack(side=tk.TOP, anchor=tk.W, padx=10, pady=(0, 10))
+        # Sorrend: leírás, a funkció beállításai, állapot, Indítás
+        for w in [self.guide_status, self.guide_run] + list(self.feature_options.values()):
+            w.pack_forget()
+        # Az Indítás gomb és az állapotsor a panel aljára kerül, és elsőként kap helyet (before=fejléc),
+        # így alacsony ablakban sem lóg ki; ha kevés a hely, a leírás alja vágódik le
+        self.guide_run.pack(side=tk.BOTTOM, anchor=tk.W, padx=10, pady=(4, 10), before=self._panel_canvas)
+        self.guide_status.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=(4, 0), before=self._panel_canvas)
+        options = self.feature_options.get(feat.key)
+        if options is not None:
+            options.pack(side=tk.TOP, fill=tk.X, padx=10, pady=(0, 6))
 
     def _style_feature_buttons(self):
         """A kiválasztott funkció gombja a funkció színével keretezve, benyomva."""
@@ -3184,21 +3382,28 @@ class ImageRenamerGUI(_BaseTk):
         if self.busy:
             self.show_info(self.t("info"), self.t("busy"))
             return
+        criteria = self.dup_criteria()
+        if not criteria:
+            self.show_info(self.t("info"), self.t("dup_crit_none"))
+            return
         paths = self.selected_paths() or list(self.grid_view.paths)
         if len(paths) < 2:
             self.show_info(self.t("info"), self.t("dup_none"))
             return
 
         def work():
-            return find_duplicates(paths, lambda i, n: self.call_in_ui(
+            return find_duplicates_by(paths, criteria, lambda i, n: self.call_in_ui(
                 self.set_status, self.t("dup_progress", i=i, n=n)))
 
-        self.run_in_background(work, lambda groups: self.after(0, self._show_duplicates, groups))
+        self.run_in_background(work, lambda result: self.after(0, self._show_duplicates, *result, criteria))
 
-    def _show_duplicates(self, groups):
+    def _show_duplicates(self, groups, missing=(), criteria=DEFAULT_DUP_CRITERIA):
         self.set_status(self.t("ready"))
+        notes = [self.t("dup_criteria_used", names=", ".join(self.t("dup_crit_" + c) for c in criteria))]
+        if missing:
+            notes.append(self.t("dup_missing", n=len(missing)))
         if not groups:
-            self.show_info(self.t("info"), self.t("dup_none"))
+            self.show_info(self.t("info"), "\n".join([self.t("dup_none")] + notes))
             return
         extra = [p for g in groups for p in g[1:]]
         size = sum(os.path.getsize(p) for p in extra if os.path.exists(p))
@@ -3206,8 +3411,9 @@ class ImageRenamerGUI(_BaseTk):
         win.title(self.t("dup_title"))
         win.transient(self)
         win.geometry("820x480" + self._center_pos(820, 480))
-        tk.Label(win, text=self.t("dup_summary", g=len(groups), n=len(extra), mb=size / 1024 / 1024),
-                 justify=tk.LEFT, anchor="w", wraplength=780).pack(fill=tk.X, padx=10, pady=(10, 4))
+        summary = "dup_summary" if "content" in criteria else "dup_summary_meta"
+        text = "\n".join([self.t(summary, g=len(groups), n=len(extra), mb=size / 1024 / 1024)] + notes)
+        tk.Label(win, text=text, justify=tk.LEFT, anchor="w", wraplength=780).pack(fill=tk.X, padx=10, pady=(10, 4))
         tree = self._preview_tree(win, [("#0", self.t("dup_col_file"), 520), ("role", "", 200)])
         for i, group in enumerate(groups, 1):
             node = tree.insert("", tk.END, text=self.t("dup_group", i=i, n=len(group)), open=True)

@@ -60,8 +60,18 @@ Példa: `IMG_1234.jpg` → `2024-05-01_14-30-00_Balaton.jpg`
   és névütközéskor `_1`, `_2` végződést ad. Visszavonható (Ctrl+Z); az általa létrehozott üres mappákat ilyenkor törli.
 - Visszavonás több lépésben (*Szerkesztés → Visszavonás*, Ctrl+Z): az utolsó 20 átnevezés/rendezés
   visszavonható, a program újraindítása után is (`history.json` a beállítások mellett). A menü mutatja, mi lenne visszavonva.
-- **Duplikátumkeresés** (funkciópanel, vagy *Szerkesztés → Duplikátumok keresése*): azonos tartalmú fájlok a kijelöltek (vagy a látható
-  fájlok) között. A másolatokat egy gombnyomással kijelöli, a törlés a Törlés gombbal, lomtárba történik.
+- **Duplikátumkeresés** (funkciópanel, vagy *Szerkesztés → Duplikátumok keresése*) a kijelöltek (vagy a látható
+  fájlok) között. Pipálható szempontok (a program megjegyzi őket):
+  - *Fájltartalom*: bájtra azonos fájlok (méret, majd SHA-1 lenyomat). Ez a legbiztosabb, alapból ez van bepipálva.
+  - *EXIF felvételi idő*, ezredmásodpercig, ha a gép írja (SubSecTimeOriginal), különben másodpercig.
+  - *ImageUniqueID*: csak egyes gépek írják.
+  - *Gép típusa + sorozatszám*.
+
+  Több pipa szigorúbb keresést jelent: minden bepipált szempontnak egyeznie kell. Ha egy fájlból hiányzik egy
+  bepipált EXIF-adat, kimarad, és a program kiírja, hány ilyen volt. Fájltartalom nélkül az újratömörített
+  vagy átméretezett másolatokat is megtalálja, ha az EXIF megmaradt bennük (a WhatsApp és a Facebook törli);
+  ilyenkor csoportonként a legnagyobb fájl a megtartandó.
+  A másolatokat egy gombnyomással kijelöli, a törlés a Törlés gombbal, lomtárba történik.
 - Törlés lomtárba (`send2trash`), almappák be-/kikapcsolása, mappa behúzása az ablakba
 - Beépített VLC-lejátszó (ha nincs VLC, a rendszer alapértelmezett lejátszója nyílik meg)
 - Magyar és angol felület
