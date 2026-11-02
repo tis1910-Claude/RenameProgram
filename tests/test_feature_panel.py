@@ -27,23 +27,58 @@ def test_feature_icon_is_drawn_without_files():
     assert m.draw_feature_icon("valami-uj", "#888888").size == (32, 32)
 
 
-def test_panel_buttons_run_the_feature(app, monkeypatch):
+def test_panel_buttons_select_and_start_the_feature(app, monkeypatch):
     pump(app, 0.3)
     assert list(app.feature_buttons) == [f.key for f in m.FEATURES]
     for key, btn in app.feature_buttons.items():
         assert btn.winfo_ismapped(), key
         assert btn.winfo_rootx() < app.grid_view.winfo_rootx()  # a rácstól balra
+    # funkció nélkül az első lépések, Indítás gomb nincs
+    assert app.t("guide_step_folder") in app.guide_label.cget("text")
+    assert not app.guide_run.winfo_ismapped()
     calls = []
-    monkeypatch.setattr(m.messagebox, "showinfo", lambda *a, **k: calls.append(a))
-    app.feature_buttons["rename"].invoke()  # nincs kijelölés -> tájékoztatás
-    assert calls and calls[-1][1] == app.t("none_selected")
+    monkeypatch.setattr(app, "rename_selected", lambda: calls.append("rename"))
+    app.feature_buttons["rename"].invoke()  # kiválasztás: még nem indul el
+    pump(app, 0.2)
+    assert app.active_feature == "rename" and calls == []
+    assert app.guide_label.cget("text") == app.t("guide_rename")
+    assert app.guide_status.cget("text") == app.t("guide_need_folder")
+    assert app.guide_run.winfo_ismapped()
+    app.guide_run.invoke()
+    assert calls == ["rename"]
+
+
+def test_guide_follows_folder_and_selection(app, tmp_path):
+    from conftest import make_jpg
+    for i in range(3):
+        make_jpg(str(tmp_path / f"k{i}.jpg"), "2023:07:01 10:00:0%d" % i)
+    app.folder = str(tmp_path)
+    app.load_media()
+    pump(app, 0, until=lambda: len(app.files) == 3)
+    assert app.t("guide_step_folder_done", folder=tmp_path.name, n=3) in app.guide_label.cget("text")
+    app.select_feature("daysort")
+    assert app.guide_label.cget("text") == app.t("guide_daysort")
+    assert app.guide_status.cget("text") == app.t("guide_selected", n=0)
+    app.mark_all()
+    pump(app, 0.2)
+    assert app.guide_status.cget("text") == app.t("guide_selected", n=3)
+    # megjelenésváltás után is kiemelve marad
+    app.apply_appearance("flat-dark")
+    assert int(app.feature_buttons["daysort"].cget("highlightthickness")) == 2
+    assert app.feature_buttons["daysort"].cget("highlightbackground").lower() == m.FEATURE_BY_KEY["daysort"].color
+
+
+def test_every_feature_has_a_guide():
+    for feat in m.FEATURES:
+        for lang in ("hu", "en"):
+            assert feat.guide in m.TEXTS[lang], (lang, feat.guide)
 
 
 def test_feature_buttons_follow_busy_state(app):
     app.set_busy(True)
-    assert all(str(b.cget("state")) == "disabled" for b in app.feature_buttons.values())
+    assert str(app.guide_run.cget("state")) == "disabled"
     app.set_busy(False)
-    assert all(str(b.cget("state")) == "normal" for b in app.feature_buttons.values())
+    assert str(app.guide_run.cget("state")) == "normal"
 
 
 def test_bottom_row_keeps_only_file_actions(app):

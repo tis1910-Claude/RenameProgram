@@ -242,6 +242,29 @@ TEXTS = {
         "feat_rename_desc": "Dátum és téma alapján",
         "feat_daysort_desc": "ÉÉÉÉ-HH-NN mappákba",
         "feat_duplicates_desc": "Azonos tartalmú fájlok",
+        "guide_title": "Útmutató",
+        "guide_run": "▶  Indítás",
+        "guide_step_folder": "1. Válassz ki egy mappát: „Mappa kiválasztása” gomb lent, vagy húzd ide a mappát.",
+        "guide_step_folder_done": "✓ 1. Mappa: {folder} ({n} fájl)",
+        "guide_step_feature": "2. Válassz egy funkciót fent.",
+        "guide_need_folder": "Előbb válassz ki egy mappát (Mappa kiválasztása gomb lent).",
+        "guide_selected": "Kijelölve: {n} fájl",
+        "guide_daysort": ("1. Jelöld ki a rendezendő fájlokat (kattintás, Shift+kattintás, Ctrl+A). Ha nem jelölsz ki "
+                          "semmit, az összes látható fájl rendeződik.\n"
+                          "2. Kattints az Indítás gombra.\n"
+                          "3. Az előnézetben nézd meg, melyik fájl melyik ÉÉÉÉ-HH-NN mappába kerül, majd OK.\n"
+                          "Visszavonás: Ctrl+Z."),
+        "guide_rename": ("1. Jelöld ki az átnevezendő fájlokat (kattintás, Shift+kattintás, Ctrl+A).\n"
+                         "2. Kattints az Indítás gombra.\n"
+                         "3. Írd be a témát (pl. Balaton), és döntsd el, hogy közös új mappába kerüljenek-e.\n"
+                         "4. Az előnézetben ellenőrizd az új neveket (ha a gép órája rosszul járt, itt "
+                         "eltolhatod az időt), majd OK.\n"
+                         "Visszavonás: Ctrl+Z."),
+        "guide_duplicates": ("1. Jelöld ki a vizsgálandó fájlokat, vagy ne jelölj ki semmit: ekkor az összes látható "
+                             "fájlt átnézi.\n"
+                             "2. Kattints az Indítás gombra.\n"
+                             "3. A találatoknál a „Másolatok kijelölése” gomb kijelöli a fölösleges példányokat, "
+                             "a Törlés gomb pedig lomtárba teszi őket."),
         "daysort_all": "Nincs kijelölt fájl. Rendezed mind a {n} betöltött fájlt?",
         "daysort_title": "Rendezés napok szerint - előnézet",
         "daysort_summary": ("{n} fájl kerül át {d} napi mappába (ÉÉÉÉ-HH-NN) ide: {folder}\n"
@@ -382,6 +405,28 @@ TEXTS = {
         "feat_rename_desc": "By date and topic",
         "feat_daysort_desc": "Into YYYY-MM-DD folders",
         "feat_duplicates_desc": "Files with identical content",
+        "guide_title": "Guide",
+        "guide_run": "▶  Start",
+        "guide_step_folder": "1. Choose a folder: the “Select folder” button below, or drop a folder here.",
+        "guide_step_folder_done": "✓ 1. Folder: {folder} ({n} files)",
+        "guide_step_feature": "2. Choose a function above.",
+        "guide_need_folder": "Choose a folder first (Select folder button below).",
+        "guide_selected": "Selected: {n} files",
+        "guide_daysort": ("1. Select the files to sort (click, Shift+click, Ctrl+A). With nothing selected, all "
+                          "visible files are sorted.\n"
+                          "2. Click Start.\n"
+                          "3. Check in the preview which YYYY-MM-DD folder each file goes to, then OK.\n"
+                          "Undo: Ctrl+Z."),
+        "guide_rename": ("1. Select the files to rename (click, Shift+click, Ctrl+A).\n"
+                         "2. Click Start.\n"
+                         "3. Enter the topic (e.g. Lake Balaton) and decide whether to move them into a new folder.\n"
+                         "4. Check the new names in the preview (shift the time here if the camera clock was "
+                         "wrong), then OK.\n"
+                         "Undo: Ctrl+Z."),
+        "guide_duplicates": ("1. Select the files to check, or select nothing to check all visible files.\n"
+                             "2. Click Start.\n"
+                             "3. In the results, “Select copies” selects the spare copies and the Delete button "
+                             "moves them to the recycle bin."),
         "daysort_all": "No files selected. Sort all {n} loaded files?",
         "daysort_title": "Sort by day - preview",
         "daysort_summary": ("{n} files will be moved into {d} day folders (YYYY-MM-DD) in: {folder}\n"
@@ -1587,13 +1632,15 @@ class Feature:
     """Egy funkció a bal oldali panelen.
 
     key:     azonosító (ikon, teszt), title/desc: szövegkulcsok a TEXTS-ben,
-    method:  az ImageRenamerGUI metódusának neve, amit a gomb meghív,
-    color:   az ikon csempéjének színe.
-    Új funkció = egy új Feature a FEATURES listában + egy rajzoló a FEATURE_ICONS-ban.
+    method:  az ImageRenamerGUI metódusának neve, amit az Indítás gomb meghív,
+    color:   az ikon csempéjének színe,
+    guide:   az útmutató szövegkulcsa (alapból "guide_<key>"), ezt mutatja a panel a funkció kiválasztása után.
+    Új funkció = egy új Feature a FEATURES listában + "guide_<key>" szöveg + (ha kell) rajzoló a FEATURE_ICONS-ban.
     """
 
-    def __init__(self, key, title, desc, method, color):
+    def __init__(self, key, title, desc, method, color, guide=None):
         self.key, self.title, self.desc, self.method, self.color = key, title, desc, method, color
+        self.guide = guide or "guide_" + key
 
 
 FEATURES = [
@@ -1601,6 +1648,7 @@ FEATURES = [
     Feature("rename", "feat_rename", "feat_rename_desc", "rename_selected", "#2563eb"),
     Feature("duplicates", "menu_duplicates", "feat_duplicates_desc", "find_duplicates_ui", "#d97706"),
 ]
+FEATURE_BY_KEY = {f.key: f for f in FEATURES}
 
 
 def _icon_calendar(d, s, fg):
@@ -2158,10 +2206,78 @@ class ImageRenamerGUI(_BaseTk):
             self.feature_icons[feat.key] = ImageTk.PhotoImage(draw_feature_icon(feat.key, feat.color), master=self)
             btn = tk.Button(panel, text=f"{self.t(feat.title)}\n{self.t(feat.desc)}",
                             image=self.feature_icons[feat.key], compound=tk.LEFT, anchor=tk.W,
-                            justify=tk.LEFT, padx=8, pady=6, cursor="hand2", command=command)
+                            justify=tk.LEFT, padx=8, pady=6, cursor="hand2",
+                            command=partial(self.select_feature, feat.key))
             btn.pack(side=tk.TOP, fill=tk.X, padx=8, pady=3)
             self.feature_buttons[feat.key] = btn
-            self.action_buttons.append(btn)
+
+        # Útmutató: funkció nélkül az első lépéseket mutatja, kiválasztás után az adott funkcióét
+        self.active_feature = None
+        ttk.Separator(panel, orient=tk.HORIZONTAL).pack(side=tk.TOP, fill=tk.X, padx=8, pady=(10, 6))
+        self.guide_title = tk.Label(panel, text=self.t("guide_title"), anchor=tk.W, font=self._panel_font)
+        self.guide_title.pack(side=tk.TOP, fill=tk.X, padx=10)
+        self.guide_label = tk.Label(panel, anchor=tk.NW, justify=tk.LEFT, wraplength=210)
+        self.guide_label.pack(side=tk.TOP, fill=tk.X, padx=10, pady=(4, 6))
+        self.guide_status = tk.Label(panel, anchor=tk.W, justify=tk.LEFT, wraplength=210)
+        self.guide_run = tk.Button(panel, text=self.t("guide_run"), padx=10, pady=4, cursor="hand2",
+                                   command=self.run_active_feature)
+        self.action_buttons.append(self.guide_run)
+        self.refresh_guide()
+
+    def select_feature(self, key):
+        """Funkció kiválasztása: kiemeli a gombját, és az útmutató erre a funkcióra vált."""
+        self.active_feature = key if key in FEATURE_BY_KEY else None
+        self._style_feature_buttons()
+        self.refresh_guide()
+
+    def run_active_feature(self):
+        feat = FEATURE_BY_KEY.get(self.active_feature)
+        if feat:
+            getattr(self, feat.method)()
+
+    def refresh_guide(self):
+        """Az útmutató szövege a mappa, a kiválasztott funkció és a kijelölés alapján."""
+        if not hasattr(self, "guide_label"):
+            return
+        folder = getattr(self, "folder", "")
+        feat = FEATURE_BY_KEY.get(self.active_feature)
+        if feat is None:
+            first = (self.t("guide_step_folder_done", folder=os.path.basename(folder.rstrip("\\/")) or folder,
+                            n=len(self.files)) if folder else self.t("guide_step_folder"))
+            self.guide_title.config(text=self.t("guide_title"))
+            self.guide_label.config(text=first + "\n" + self.t("guide_step_feature"))
+            self.guide_status.pack_forget()
+            self.guide_run.pack_forget()
+            return
+        self.guide_title.config(text=f"{self.t('guide_title')}: {self.t(feat.title)}")
+        self.guide_label.config(text=self.t(feat.guide))
+        if folder:
+            status = self.t("guide_selected", n=len(self.grid_view.visible_selected()))
+        else:
+            status = self.t("guide_need_folder")
+        warn = self.colors.get("warn", "#a05000")
+        self.guide_status.config(text=status, fg=self.guide_label.cget("fg") if folder else warn)
+        self.guide_status.pack(side=tk.TOP, fill=tk.X, padx=10, pady=(0, 6))
+        self.guide_run.pack(side=tk.TOP, anchor=tk.W, padx=10, pady=(0, 10))
+
+    def _style_feature_buttons(self):
+        """A kiválasztott funkció gombja a funkció színével keretezve, benyomva."""
+        if not hasattr(self, "feature_buttons"):
+            return
+        flat = self.appearance != "system"
+        for key, btn in self.feature_buttons.items():
+            active = key == self.active_feature
+            if active:
+                border = FEATURE_BY_KEY[key].color
+            else:
+                border = self.colors["border"] if flat else self.feature_panel.cget("background")
+            opts = {"highlightthickness": 2, "highlightbackground": border, "highlightcolor": border}
+            if flat:
+                opts["background"] = self.colors["button_active" if active else "button"]
+                opts["relief"] = tk.FLAT
+            else:
+                opts["relief"] = tk.SUNKEN if active else tk.RAISED
+            btn.configure(**opts)
 
     def set_busy(self, busy):
         self.busy = busy
@@ -2399,6 +2515,9 @@ class ImageRenamerGUI(_BaseTk):
         for w in self._walk(self):
             if isinstance(w, (tk.Tk, tk.Toplevel)):
                 self._set_titlebar_dark(w)
+        # A gombok újraszínezése után a kiválasztott funkció kiemelése és az útmutató színei
+        self._style_feature_buttons()
+        self.refresh_guide()
 
     @staticmethod
     def _walk(widget):
@@ -2582,6 +2701,7 @@ class ImageRenamerGUI(_BaseTk):
         if shown != total:
             text += self.t("count_filtered", total=total)
         self.count_label.config(text=text)
+        self.refresh_guide()
 
     def _start_date_index(self, files):
         """A dátumok beolvasása a háttérben, hogy a dátumszűrő és az átnevezés gyors legyen."""

@@ -9,9 +9,11 @@ Példa: `IMG_1234.jpg` → `2024-05-01_14-30-00_Balaton.jpg`
 
 - **Funkcióválasztó panel** a bal oldalon: ikonos gombok a fő műveletekhez (Rendezés napok szerint, Fájlok
   átnevezése, Duplikátumok keresése), mindegyik alatt egy sor leírással. Az alsó gombsorban a fájlkezelő
-  műveletek maradnak (mappa, frissítés, kijelölés, törlés). Új funkció hozzáadása: egy új `Feature` a
-  `FEATURES` listában, és ha saját ikont kap, egy rajzoló a `FEATURE_ICONS`-ban (az ikonokat a program
-  Pillow-val rajzolja, nincs hozzájuk külön fájl).
+  műveletek maradnak (mappa, frissítés, kijelölés, törlés). A gombok alatti **Útmutató** először a kezdő
+  lépéseket mutatja (mappa, majd funkció választása); funkcióválasztás után az adott funkció lépéseit, a kijelölt
+  fájlok számát és az **Indítás** gombot. Új funkció hozzáadása: egy új `Feature` a `FEATURES` listában, egy
+  `guide_<kulcs>` útmutatószöveg a `TEXTS`-ben, és ha saját ikont kap, egy rajzoló a `FEATURE_ICONS`-ban (az
+  ikonokat a program Pillow-val rajzolja, nincs hozzájuk külön fájl).
 - Bélyegképes áttekintés (fotók helyes elforgatással, videóknál képkocka az ffmpeg-gel). Több ezer fájlnál is gyors:
   csak a látható képek töltődnek be, és a kész bélyegképeket a program lemezen megőrzi (legfeljebb kb. 300 MB,
   Windowson `%LOCALAPPDATA%\MediaRenamerPro\thumbs`), így a mappa következő megnyitása azonnali.
