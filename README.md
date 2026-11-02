@@ -7,6 +7,11 @@ Példa: `IMG_1234.jpg` → `2024-05-01_14-30-00_Balaton.jpg`
 
 ## Funkciók
 
+- **Funkcióválasztó panel** a bal oldalon: ikonos gombok a fő műveletekhez (Rendezés napok szerint, Fájlok
+  átnevezése, Duplikátumok keresése), mindegyik alatt egy sor leírással. Az alsó gombsorban a fájlkezelő
+  műveletek maradnak (mappa, frissítés, kijelölés, törlés). Új funkció hozzáadása: egy új `Feature` a
+  `FEATURES` listában, és ha saját ikont kap, egy rajzoló a `FEATURE_ICONS`-ban (az ikonokat a program
+  Pillow-val rajzolja, nincs hozzájuk külön fájl).
 - Bélyegképes áttekintés (fotók helyes elforgatással, videóknál képkocka az ffmpeg-gel). Több ezer fájlnál is gyors:
   csak a látható képek töltődnek be, és a kész bélyegképeket a program lemezen megőrzi (legfeljebb kb. 300 MB,
   Windowson `%LOCALAPPDATA%\MediaRenamerPro\thumbs`), így a mappa következő megnyitása azonnali.
@@ -53,7 +58,7 @@ Példa: `IMG_1234.jpg` → `2024-05-01_14-30-00_Balaton.jpg`
   és névütközéskor `_1`, `_2` végződést ad. Visszavonható (Ctrl+Z); az általa létrehozott üres mappákat ilyenkor törli.
 - Visszavonás több lépésben (*Szerkesztés → Visszavonás*, Ctrl+Z): az utolsó 20 átnevezés/rendezés
   visszavonható, a program újraindítása után is (`history.json` a beállítások mellett). A menü mutatja, mi lenne visszavonva.
-- **Duplikátumkeresés** (*Szerkesztés → Duplikátumok keresése*): azonos tartalmú fájlok a kijelöltek (vagy a látható
+- **Duplikátumkeresés** (funkciópanel, vagy *Szerkesztés → Duplikátumok keresése*): azonos tartalmú fájlok a kijelöltek (vagy a látható
   fájlok) között. A másolatokat egy gombnyomással kijelöli, a törlés a Törlés gombbal, lomtárba történik.
 - Törlés lomtárba (`send2trash`), almappák be-/kikapcsolása, mappa behúzása az ablakba
 - Beépített VLC-lejátszó (ha nincs VLC, a rendszer alapértelmezett lejátszója nyílik meg)

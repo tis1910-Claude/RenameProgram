@@ -1,4 +1,4 @@
-"""Media Renamer Pro 4.3
+"""Media Renamer Pro 4.4
 
 Képek és videók csoportos átnevezése a felvétel dátuma és egy téma alapján,
 opcionálisan közös (dátum_téma) mappába mozgatva, vagy napok szerint
@@ -32,6 +32,7 @@ from functools import partial
 
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
+from tkinter import font as tkfont
 from PIL import Image, ImageTk, ImageOps
 
 try:
@@ -74,7 +75,7 @@ try:
 except Exception:
     rawpy = None
 
-APP_NAME = "Media Renamer Pro 4.3"
+APP_NAME = "Media Renamer Pro 4.4"
 HEIF_EXTS = (".heic", ".heif")
 # RAW-fájlok: a dátumot az exifread, a bélyegképet a rawpy (vagy a beágyazott kis előnézet) adja
 RAW_EXTS = (".dng", ".cr2", ".cr3", ".nef", ".nrw", ".arw", ".orf", ".rw2", ".raf", ".pef", ".srw")
@@ -236,6 +237,11 @@ TEXTS = {
         "unchanged_mark": "(változatlan)",
         "from_name": " (névből)",
         "btn_daysort": "Rendezés napok szerint",
+        "panel_title": "Funkcióválasztó",
+        "feat_rename": "Fájlok átnevezése",
+        "feat_rename_desc": "Dátum és téma alapján",
+        "feat_daysort_desc": "ÉÉÉÉ-HH-NN mappákba",
+        "feat_duplicates_desc": "Azonos tartalmú fájlok",
         "daysort_all": "Nincs kijelölt fájl. Rendezed mind a {n} betöltött fájlt?",
         "daysort_title": "Rendezés napok szerint - előnézet",
         "daysort_summary": ("{n} fájl kerül át {d} napi mappába (ÉÉÉÉ-HH-NN) ide: {folder}\n"
@@ -371,6 +377,11 @@ TEXTS = {
         "unchanged_mark": "(unchanged)",
         "from_name": " (from name)",
         "btn_daysort": "Sort by day",
+        "panel_title": "Functions",
+        "feat_rename": "Rename files",
+        "feat_rename_desc": "By date and topic",
+        "feat_daysort_desc": "Into YYYY-MM-DD folders",
+        "feat_duplicates_desc": "Files with identical content",
         "daysort_all": "No files selected. Sort all {n} loaded files?",
         "daysort_title": "Sort by day - preview",
         "daysort_summary": ("{n} files will be moved into {d} day folders (YYYY-MM-DD) in: {folder}\n"
@@ -1569,6 +1580,78 @@ def short_name(name, limit=40):
     return name[:keep - keep // 3] + "…" + name[-(keep // 3):]
 
 
+# ---------------------------------------------------------------------------
+# Funkcióválasztó panel: a bal oldali gombok egy bővíthető listából készülnek
+# ---------------------------------------------------------------------------
+class Feature:
+    """Egy funkció a bal oldali panelen.
+
+    key:     azonosító (ikon, teszt), title/desc: szövegkulcsok a TEXTS-ben,
+    method:  az ImageRenamerGUI metódusának neve, amit a gomb meghív,
+    color:   az ikon csempéjének színe.
+    Új funkció = egy új Feature a FEATURES listában + egy rajzoló a FEATURE_ICONS-ban.
+    """
+
+    def __init__(self, key, title, desc, method, color):
+        self.key, self.title, self.desc, self.method, self.color = key, title, desc, method, color
+
+
+FEATURES = [
+    Feature("daysort", "btn_daysort", "feat_daysort_desc", "sort_by_day", "#16a34a"),
+    Feature("rename", "feat_rename", "feat_rename_desc", "rename_selected", "#2563eb"),
+    Feature("duplicates", "menu_duplicates", "feat_duplicates_desc", "find_duplicates_ui", "#d97706"),
+]
+
+
+def _icon_calendar(d, s, fg):
+    """Naptár: keret, fejléc-sáv, két gyűrű, napok rácsa."""
+    d.rounded_rectangle((0.2 * s, 0.26 * s, 0.8 * s, 0.8 * s), radius=0.06 * s, outline=fg, width=round(0.06 * s))
+    d.rectangle((0.2 * s, 0.26 * s, 0.8 * s, 0.4 * s), fill=fg)
+    for x in (0.34, 0.66):
+        d.rounded_rectangle((x * s - 0.03 * s, 0.18 * s, x * s + 0.03 * s, 0.32 * s), radius=0.03 * s, fill=fg)
+    for row in (0.52, 0.66):
+        for col in (0.33, 0.5, 0.67):
+            r = 0.045 * s
+            d.rectangle((col * s - r, row * s - r, col * s + r, row * s + r), fill=fg)
+
+
+def _icon_rename(d, s, fg):
+    """Címke (névcédula) lyukkal és két szövegsorral."""
+    d.polygon([(0.16 * s, 0.32 * s), (0.62 * s, 0.32 * s), (0.84 * s, 0.5 * s), (0.62 * s, 0.68 * s),
+               (0.16 * s, 0.68 * s)], fill=fg)
+    hole = 0.045 * s
+    d.ellipse((0.68 * s - hole, 0.5 * s - hole, 0.68 * s + hole, 0.5 * s + hole), fill=(0, 0, 0, 0))
+    for y, x2 in ((0.44, 0.52), (0.56, 0.44)):
+        d.rectangle((0.24 * s, y * s - 0.025 * s, x2 * s, y * s + 0.025 * s), fill=(0, 0, 0, 0))
+
+
+def _icon_duplicates(d, s, fg):
+    """Két egymásra csúsztatott lap."""
+    w = round(0.06 * s)
+    d.rounded_rectangle((0.2 * s, 0.2 * s, 0.6 * s, 0.64 * s), radius=0.05 * s, outline=fg, width=w)
+    d.rounded_rectangle((0.38 * s, 0.36 * s, 0.8 * s, 0.8 * s), radius=0.05 * s, fill=fg)
+
+
+FEATURE_ICONS = {"daysort": _icon_calendar, "rename": _icon_rename, "duplicates": _icon_duplicates}
+
+
+def draw_feature_icon(key, color, size=32):
+    """A funkció ikonja Pillow-val rajzolva (nincs külső ikonfájl): színes, lekerekített csempe fehér
+    jellel. Négyszeres méretben rajzolunk, majd kicsinyítünk, így az élek simák."""
+    from PIL import ImageDraw
+    big = size * 4
+    tile = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    ImageDraw.Draw(tile).rounded_rectangle((0, 0, big - 1, big - 1), radius=big // 5, fill=color)
+    glyph = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    drawer = FEATURE_ICONS.get(key)
+    if drawer:
+        drawer(ImageDraw.Draw(glyph), big, (255, 255, 255, 255))
+    else:  # rajzoló nélküli funkció: egyszerű pont a csempén
+        ImageDraw.Draw(glyph).ellipse((big * 0.35, big * 0.35, big * 0.65, big * 0.65), fill="white")
+    tile.alpha_composite(glyph)
+    return tile.resize((size, size), Image.LANCZOS)
+
+
 class ThumbGrid(tk.Frame):
     """Bélyegképrács egyetlen vásznon. Csak a látható cellák rajzolódnak ki, és csak azok
     bélyegképe töltődik be, így több ezer fájlnál sem lassul be, és nem eszi a memóriát.
@@ -1894,7 +1977,7 @@ class ImageRenamerGUI(_BaseTk):
         self.colors = SYSTEM_COLORS
         self.appearance_var = tk.StringVar(value=self.settings.appearance)
         self.title(APP_NAME)
-        self.geometry("1000x700")
+        self.geometry("1100x720")
         self.minsize(800, 600)
 
         # Háttérszálak -> fő szál üzenetsor (Tk widgetet csak a fő szál érinthet)
@@ -1925,10 +2008,14 @@ class ImageRenamerGUI(_BaseTk):
         self.count_label.pack(side=tk.RIGHT, padx=4)
         self.status_bar.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        self.filter_frame.pack(side=tk.TOP, fill=tk.X, padx=4, pady=(4, 0))
-        self.grid_view.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self.btn_frame.pack(side=tk.BOTTOM, fill=tk.X)
         status_frame.pack(side=tk.BOTTOM, fill=tk.X)
+        # Bal oldalt a funkcióválasztó, mellette (jobbra) a szűrősor és a bélyegképrács
+        self.feature_panel = tk.Frame(self)
+        self.feature_panel.pack(side=tk.LEFT, fill=tk.Y)
+        ttk.Separator(self, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y)
+        self.filter_frame.pack(side=tk.TOP, fill=tk.X, padx=4, pady=(4, 0))
+        self.grid_view.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
         self.icons = {key: self.load_icon(name) for key, name in {
             "folder": "folder.png", "rename": "rename.png", "refresh": "refresh.png",
@@ -1952,7 +2039,6 @@ class ImageRenamerGUI(_BaseTk):
         self.action_buttons = [self.delete_button]
         for text, cmd, icon_key in [
             ("btn_folder", self.select_folder, "folder"),
-            ("btn_rename", self.rename_selected, "rename"),
             ("btn_refresh", self.load_media, "refresh"),
             ("btn_markall", self.mark_all, "markall"),
             ("btn_unmark", self.unmark_all, "unmark"),
@@ -1961,6 +2047,7 @@ class ImageRenamerGUI(_BaseTk):
                             compound="left", command=cmd)
             btn.pack(side=tk.LEFT, padx=2)
             self.action_buttons.append(btn)
+        self.bottom_buttons = self.action_buttons[1:]
 
         self.files = []
         self._build_filter_bar()
@@ -1974,12 +2061,9 @@ class ImageRenamerGUI(_BaseTk):
         self.folder = ""
         self.moved_out = set()  # új mappába mozgatott fájlok: az almappákból se töltődjenek vissza a listába
 
-        self.daysort_button = tk.Button(self.btn_frame, text=self.t("btn_daysort"), image=self.icons["folder"],
-                                        compound="left", padx=4, command=self.sort_by_day)
-        self.daysort_button.pack(side=tk.LEFT, padx=2)
-        self.action_buttons.append(self.daysort_button)
+        self._build_feature_panel()
         # Keskeny ablakban a gombok új sorba törnek, egyik sem csúszik ki (a Törlés és Kilépés a végére kerül)
-        self._flow_order = self.action_buttons[1:] + [self.delete_button, self.exit_button]
+        self._flow_order = self.bottom_buttons + [self.delete_button, self.exit_button]
         for btn in self._flow_order:
             btn.pack_forget()
         self.btn_frame.bind("<Configure>", lambda e: self._flow_buttons())
@@ -2036,21 +2120,48 @@ class ImageRenamerGUI(_BaseTk):
 
     def _flow_buttons(self):
         """Az alsó gombsor tördelése az ablak szélességéhez (sorfolytonos elrendezés)."""
-        width = self.btn_frame.winfo_width()
+        self._flow_layout(self.btn_frame, self._flow_order)
+
+    def _flow_layout(self, frame, widgets, pad=2):
+        """A widgetek sorfolytonos elhelyezése a keretben: ami nem fér ki, új sorba kerül."""
+        width = frame.winfo_width()
         if width <= 1:
             width = self.winfo_width() if self.winfo_width() > 1 else 1000
         x = y = row_h = 0
-        pad = 2
-        for btn in self._flow_order:
-            w, h = btn.winfo_reqwidth(), btn.winfo_reqheight()
-            if x and x + w > width:
+        for w in widgets:
+            ww, wh = w.winfo_reqwidth(), w.winfo_reqheight()
+            if x and x + ww > width:
                 x, y, row_h = 0, y + row_h + pad, 0
-            btn.place(x=x + pad, y=y + pad)
-            x += w + 2 * pad
-            row_h = max(row_h, h)
+            w.place(x=x + pad, y=y + pad)
+            x += ww + 2 * pad
+            row_h = max(row_h, wh)
         height = y + row_h + 2 * pad
-        if int(self.btn_frame.cget("height")) != height:
-            self.btn_frame.configure(height=height)
+        if int(frame.cget("height")) != height:
+            frame.configure(height=height)
+
+    def _build_feature_panel(self):
+        """A bal oldali funkcióválasztó: a FEATURES lista minden eleméből egy ikonos gomb
+        (cím + rövid leírás). Új funkcióhoz elég a FEATURES listát bővíteni."""
+        panel = self.feature_panel
+        self._panel_font = tkfont.nametofont("TkDefaultFont").copy()
+        size = self._panel_font.cget("size")  # negatív érték = képpont
+        self._panel_font.configure(weight="bold", size=size + 1 if size > 0 else size - 1)
+        header = tk.Label(panel, text=self.t("panel_title"), anchor=tk.W, font=self._panel_font)
+        header.pack(side=tk.TOP, fill=tk.X, padx=10, pady=(10, 6))
+        self.feature_icons = {}
+        self.feature_buttons = {}
+        for feat in FEATURES:
+            command = getattr(self, feat.method, None)
+            if command is None:
+                print(f"Ismeretlen funkció: {feat.method}")
+                continue
+            self.feature_icons[feat.key] = ImageTk.PhotoImage(draw_feature_icon(feat.key, feat.color), master=self)
+            btn = tk.Button(panel, text=f"{self.t(feat.title)}\n{self.t(feat.desc)}",
+                            image=self.feature_icons[feat.key], compound=tk.LEFT, anchor=tk.W,
+                            justify=tk.LEFT, padx=8, pady=6, cursor="hand2", command=command)
+            btn.pack(side=tk.TOP, fill=tk.X, padx=8, pady=3)
+            self.feature_buttons[feat.key] = btn
+            self.action_buttons.append(btn)
 
     def set_busy(self, busy):
         self.busy = busy
@@ -2420,19 +2531,24 @@ class ImageRenamerGUI(_BaseTk):
         self.filter_to = tk.StringVar()
         self.filter_file_dated = tk.BooleanVar(value=False)
         kinds = {self.t("filter_" + k): k for k in FILTER_KINDS}
-        tk.Label(f, text=self.t("filter_kind")).pack(side=tk.LEFT)
-        combo = ttk.Combobox(f, state="readonly", width=8, values=list(kinds))
+        # Összetartozó elemek csoportban; keskeny helyen (a funkciópanel mellett) a csoportok új sorba törnek
+        g_kind, g_search, g_date = tk.Frame(f), tk.Frame(f), tk.Frame(f)
+        tk.Label(g_kind, text=self.t("filter_kind")).pack(side=tk.LEFT)
+        combo = ttk.Combobox(g_kind, state="readonly", width=8, values=list(kinds))
         combo.set(self.t("filter_all"))
         combo.bind("<<ComboboxSelected>>", lambda e: (self.filter_kind.set(kinds[combo.get()]), self.apply_filter()))
-        combo.pack(side=tk.LEFT, padx=(2, 10))
-        tk.Label(f, text=self.t("filter_search")).pack(side=tk.LEFT)
-        ttk.Entry(f, textvariable=self.filter_text, width=12).pack(side=tk.LEFT, padx=(2, 10))
-        tk.Label(f, text=self.t("filter_from")).pack(side=tk.LEFT)
-        ttk.Entry(f, textvariable=self.filter_from, width=10).pack(side=tk.LEFT, padx=2)
-        tk.Label(f, text=self.t("filter_to")).pack(side=tk.LEFT)
-        ttk.Entry(f, textvariable=self.filter_to, width=10).pack(side=tk.LEFT, padx=(2, 10))
-        ttk.Checkbutton(f, text=self.t("filter_file_dated"), variable=self.filter_file_dated,
-                        command=self.apply_filter).pack(side=tk.LEFT)
+        combo.pack(side=tk.LEFT, padx=(2, 8))
+        tk.Label(g_search, text=self.t("filter_search")).pack(side=tk.LEFT)
+        ttk.Entry(g_search, textvariable=self.filter_text, width=12).pack(side=tk.LEFT, padx=(2, 8))
+        tk.Label(g_date, text=self.t("filter_from")).pack(side=tk.LEFT)
+        ttk.Entry(g_date, textvariable=self.filter_from, width=10).pack(side=tk.LEFT, padx=2)
+        tk.Label(g_date, text=self.t("filter_to")).pack(side=tk.LEFT)
+        ttk.Entry(g_date, textvariable=self.filter_to, width=10).pack(side=tk.LEFT, padx=(2, 8))
+        chk = ttk.Checkbutton(f, text=self.t("filter_file_dated"), variable=self.filter_file_dated,
+                              command=self.apply_filter)
+        self._filter_groups = [g_kind, g_search, g_date, chk]
+        f.bind("<Configure>", lambda e: self._flow_layout(f, self._filter_groups, pad=1))
+        self._flow_layout(f, self._filter_groups, pad=1)
         for var in (self.filter_text, self.filter_from, self.filter_to):
             var.trace_add("write", lambda *a: self._schedule_filter())
         self._filter_job = None
