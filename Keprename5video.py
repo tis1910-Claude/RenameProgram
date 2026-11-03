@@ -1,4 +1,4 @@
-"""Media Renamer Pro 4.4
+"""Media Renamer Pro 4.5
 
 Képek és videók csoportos átnevezése a felvétel dátuma és egy téma alapján,
 opcionálisan közös (dátum_téma) mappába mozgatva, vagy napok szerint
@@ -75,7 +75,7 @@ try:
 except Exception:
     rawpy = None
 
-APP_NAME = "Media Renamer Pro 4.4"
+APP_NAME = "Media Renamer Pro 4.5"
 HEIF_EXTS = (".heic", ".heif")
 # RAW-fájlok: a dátumot az exifread, a bélyegképet a rawpy (vagy a beágyazott kis előnézet) adja
 RAW_EXTS = (".dng", ".cr2", ".cr3", ".nef", ".nrw", ".arw", ".orf", ".rw2", ".raf", ".pef", ".srw")
@@ -141,7 +141,18 @@ TEXTS = {
         "appearance_flat-dark": "Sötét",
         "appearance_sun-valley-light": "Sun Valley világos (Windows 11)",
         "appearance_sun-valley-dark": "Sun Valley sötét (Windows 11)",
+        "appearance_azure-light": "Azure világos",
+        "appearance_azure-dark": "Azure sötét",
+        "appearance_forest-light": "Forest világos (zöld)",
+        "appearance_forest-dark": "Forest sötét (zöld)",
+        "appearance_nord": "Nord (sarki kék, sötét)",
+        "appearance_dracula": "Dracula (lila, sötét)",
+        "appearance_solarized-light": "Solarized világos",
+        "appearance_solarized-dark": "Solarized sötét",
+        "appearance_midnight": "Éjkék (sötét)",
+        "appearance_mint": "Menta (világos)",
         "appearance_needs_sv": "  (pip install sv-ttk)",
+        "appearance_missing": "  (hiányzó themes mappa)",
         "tpl_title": "Átnevezési sablon",
         "tpl_prompt": ("Sablon formátum. Használható mezők:\n"
                        "{date} = 2024-05-01_14-30-00   {day} = 2024-05-01   {time} = 14-30-00\n"
@@ -313,7 +324,18 @@ TEXTS = {
         "appearance_flat-dark": "Dark",
         "appearance_sun-valley-light": "Sun Valley light (Windows 11)",
         "appearance_sun-valley-dark": "Sun Valley dark (Windows 11)",
+        "appearance_azure-light": "Azure light",
+        "appearance_azure-dark": "Azure dark",
+        "appearance_forest-light": "Forest light (green)",
+        "appearance_forest-dark": "Forest dark (green)",
+        "appearance_nord": "Nord (arctic blue, dark)",
+        "appearance_dracula": "Dracula (purple, dark)",
+        "appearance_solarized-light": "Solarized light",
+        "appearance_solarized-dark": "Solarized dark",
+        "appearance_midnight": "Midnight blue (dark)",
+        "appearance_mint": "Mint (light)",
         "appearance_needs_sv": "  (pip install sv-ttk)",
+        "appearance_missing": "  (themes folder missing)",
         "tpl_title": "Naming template",
         "tpl_prompt": ("Template format. Available fields:\n"
                        "{date} = 2024-05-01_14-30-00   {day} = 2024-05-01   {time} = 14-30-00\n"
@@ -469,34 +491,72 @@ TEXTS = {
 # Megjelenés (a "téma" szó a programban az átnevezési témát jelenti)
 # ---------------------------------------------------------------------------
 # "system": a gép saját ttk témája és színei (Windowson "vista"), úgy, mint eddig.
-# "flat-*": a beépített "clam" ttk téma saját színekkel, nincs külső függőség.
+# "flat-*" és a színsémák: a beépített "clam" ttk téma saját színekkel, nincs külső függőség.
 # "sun-valley-*": a Windows 11 stílusú sv-ttk csomag (MIT), ha telepítve van.
-APPEARANCES = ("system", "flat-light", "flat-dark", "sun-valley-light", "sun-valley-dark")
+# "azure-*", "forest-*": rdbende képes ttk témái (MIT), a themes/ mappában a programmal együtt.
+# A menüben csoportonként, elválasztóval jelennek meg.
+APPEARANCE_GROUPS = (
+    ("system", "flat-light", "flat-dark"),
+    ("sun-valley-light", "sun-valley-dark"),
+    ("azure-light", "azure-dark", "forest-light", "forest-dark"),
+    ("nord", "dracula", "solarized-light", "solarized-dark", "midnight", "mint"),
+)
+APPEARANCES = tuple(name for group in APPEARANCE_GROUPS for name in group)
 DEFAULT_APPEARANCE = "system"
 SV_APPEARANCES = ("sun-valley-light", "sun-valley-dark")
+# Tcl fájlból betöltött ttk témák: megjelenés -> (a .tcl fájl a programmappához képest, ttk témanév)
+TCL_THEMES = {
+    "azure-light": ("themes/azure/light.tcl", "azure-light"),
+    "azure-dark": ("themes/azure/dark.tcl", "azure-dark"),
+    "forest-light": ("themes/forest/forest-light.tcl", "forest-light"),
+    "forest-dark": ("themes/forest/forest-dark.tcl", "forest-dark"),
+}
 # A régi verziók "light" értéket írtak a settings.ini-be, de nem használták semmire
 _LEGACY_APPEARANCE = {"light": "system", "dark": "flat-dark"}
 
-# Klasszikus Tk widgetek színei; a ttk widgeteket a ttk téma színezi.
+
+def _palette(bg, fg, field, canvas, thumb, button, button_active, border, select_bg, select_fg,
+             disabled, warn):
+    return {"bg": bg, "fg": fg, "field": field, "canvas": canvas, "thumb": thumb, "button": button,
+            "button_active": button_active, "border": border, "select_bg": select_bg,
+            "select_fg": select_fg, "disabled": disabled, "warn": warn}
+
+
+# Klasszikus Tk widgetek színei; a ttk widgeteket a ttk téma színezi (a "clam" alapúaknál ugyanezek).
 #   canvas/thumb: a bélyegképrács és a bélyegkép háttere, warn: figyelmeztető szöveg
 PALETTES = {
-    "flat-light": {"bg": "#f3f4f6", "fg": "#1f2328", "field": "#ffffff", "canvas": "#ffffff",
-                   "thumb": "#e5e7eb", "button": "#ffffff", "button_active": "#e3ebfa",
-                   "border": "#d0d7de", "select_bg": "#2563eb", "select_fg": "#ffffff",
-                   "disabled": "#8c959f", "warn": "#a05000"},
-    "flat-dark": {"bg": "#1e1f22", "fg": "#e6e6e6", "field": "#2b2d31", "canvas": "#16171a",
-                  "thumb": "#2b2d31", "button": "#2b2d31", "button_active": "#3a3d44",
-                  "border": "#45484f", "select_bg": "#3b82f6", "select_fg": "#ffffff",
-                  "disabled": "#6b6f76", "warn": "#f0a040"},
+    "flat-light": _palette("#f3f4f6", "#1f2328", "#ffffff", "#ffffff", "#e5e7eb", "#ffffff", "#e3ebfa",
+                           "#d0d7de", "#2563eb", "#ffffff", "#8c959f", "#a05000"),
+    "flat-dark": _palette("#1e1f22", "#e6e6e6", "#2b2d31", "#16171a", "#2b2d31", "#2b2d31", "#3a3d44",
+                          "#45484f", "#3b82f6", "#ffffff", "#6b6f76", "#f0a040"),
     # Az sv-ttk saját színei (theme/light.tcl, theme/dark.tcl)
-    "sun-valley-light": {"bg": "#fafafa", "fg": "#1c1c1c", "field": "#ffffff", "canvas": "#ffffff",
-                         "thumb": "#ececec", "button": "#ffffff", "button_active": "#e8e8e8",
-                         "border": "#d0d0d0", "select_bg": "#2f60d8", "select_fg": "#ffffff",
-                         "disabled": "#a0a0a0", "warn": "#a05000"},
-    "sun-valley-dark": {"bg": "#1c1c1c", "fg": "#fafafa", "field": "#2a2a2a", "canvas": "#202020",
-                        "thumb": "#2a2a2a", "button": "#2f2f2f", "button_active": "#3c3c3c",
-                        "border": "#454545", "select_bg": "#2f60d8", "select_fg": "#ffffff",
-                        "disabled": "#595959", "warn": "#f0a040"},
+    "sun-valley-light": _palette("#fafafa", "#1c1c1c", "#ffffff", "#ffffff", "#ececec", "#ffffff",
+                                 "#e8e8e8", "#d0d0d0", "#2f60d8", "#ffffff", "#a0a0a0", "#a05000"),
+    "sun-valley-dark": _palette("#1c1c1c", "#fafafa", "#2a2a2a", "#202020", "#2a2a2a", "#2f2f2f",
+                                "#3c3c3c", "#454545", "#2f60d8", "#ffffff", "#595959", "#f0a040"),
+    # Az Azure és a Forest téma színei (a .tcl fájlok "colors" tömbje), a Tk widgetekhez igazítva
+    "azure-light": _palette("#ffffff", "#000000", "#ffffff", "#fafafa", "#e8e8e8", "#ffffff", "#e5f1ff",
+                            "#c4c4c4", "#007fff", "#ffffff", "#737373", "#a05000"),
+    "azure-dark": _palette("#333333", "#ffffff", "#3a3a3a", "#292929", "#424242", "#3c3c3c", "#4a4a4a",
+                           "#575757", "#007fff", "#ffffff", "#8a8a8a", "#f0a040"),
+    "forest-light": _palette("#ffffff", "#313131", "#ffffff", "#fafafa", "#e4ece7", "#ffffff", "#e1efe6",
+                             "#c8c8c8", "#217346", "#ffffff", "#9a9a9a", "#a05000"),
+    "forest-dark": _palette("#313131", "#eeeeee", "#3a3a3a", "#282828", "#424242", "#3c3c3c", "#4a4a4a",
+                            "#575757", "#217346", "#ffffff", "#7a7a7a", "#f0a040"),
+    # Ismert, szabadon használható színsémák (Nord, Dracula, Solarized: MIT; Éjkék és Menta:
+    # a Bootswatch/ttkbootstrap "superhero" és "minty" színei, MIT)
+    "nord": _palette("#2e3440", "#eceff4", "#3b4252", "#272c36", "#3b4252", "#3b4252", "#434c5e",
+                     "#4c566a", "#5e81ac", "#ffffff", "#6f7a8f", "#ebcb8b"),
+    "dracula": _palette("#282a36", "#f8f8f2", "#21222c", "#21222c", "#44475a", "#44475a", "#55586e",
+                        "#6272a4", "#bd93f9", "#282a36", "#6d7392", "#ffb86c"),
+    "solarized-light": _palette("#fdf6e3", "#586e75", "#fffdf6", "#fdf6e3", "#eee8d5", "#eee8d5",
+                                "#e4dcc4", "#d3cbb7", "#268bd2", "#fdf6e3", "#93a1a1", "#cb4b16"),
+    "solarized-dark": _palette("#002b36", "#93a1a1", "#073642", "#00212b", "#073642", "#073642",
+                               "#0c4757", "#2a5560", "#268bd2", "#fdf6e3", "#586e75", "#b58900"),
+    "midnight": _palette("#2b3e50", "#ebebeb", "#20374c", "#223242", "#3a4f63", "#4e5d6c", "#5d6e7f",
+                         "#405366", "#4c9be8", "#ffffff", "#8796a5", "#f0ad4e"),
+    "mint": _palette("#f6fbf9", "#4a4a4a", "#ffffff", "#ffffff", "#e3f2ed", "#ffffff", "#e0f2ec",
+                     "#ced4da", "#2f8a73", "#ffffff", "#a0a8a5", "#c0582f"),
 }
 # A "system" megjelenésnél ezek maradnak (a korábbi verziók beégetett színei)
 SYSTEM_COLORS = {"canvas": "white", "thumb": "#eeeeee", "warn": "#a05000"}
@@ -507,11 +567,32 @@ def _blend(rgb_a, rgb_b, ratio):
     return "#" + "".join(f"{round(x * ratio + y * (1 - ratio)):02x}" for x, y in zip(rgb_a, rgb_b))
 
 
+def _luminance(color):
+    """Egy #rrggbb szín relatív világossága (0 = fekete, 1 = fehér)."""
+    r, g, b = (int(color[i:i + 2], 16) / 255 for i in (1, 3, 5))
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def appearance_is_dark(name):
+    """Sötét-e a megjelenés (a háttérszín alapján); a "system" világosnak számít."""
+    palette = PALETTES.get(name)
+    return bool(palette) and _luminance(palette["bg"]) < 0.5
+
+
+def appearance_available(name, sv_available=True):
+    """Használható-e: a Sun Valley-hez kell az sv-ttk, a Tcl témákhoz a themes/ mappa."""
+    if name in SV_APPEARANCES:
+        return sv_available
+    if name in TCL_THEMES:
+        return os.path.isfile(resource_path(TCL_THEMES[name][0]))
+    return name in APPEARANCES
+
+
 def normalize_appearance(name, sv_available=True):
     """Ismeretlen vagy nem elérhető megjelenés helyett az alapértelmezettet adja."""
     name = (name or "").strip().lower()
     name = _LEGACY_APPEARANCE.get(name, name)
-    if name not in APPEARANCES or (name in SV_APPEARANCES and not sv_available):
+    if name not in APPEARANCES or not appearance_available(name, sv_available):
         return DEFAULT_APPEARANCE
     return name
 
@@ -2052,7 +2133,12 @@ class SettingsManager:
     def load_settings(self):
         # Régi verzió az aktuális mappába írta a settings.ini-t: azt is beolvassuk
         legacy = os.path.abspath('settings.ini')
-        self.config.read([legacy, self.config_file], encoding="utf-8")
+        # utf-8-sig: a Jegyzettömb BOM-mal menti; egy sérült fájl miatt se álljon le a program
+        for path in (legacy, self.config_file):
+            try:
+                self.config.read(path, encoding="utf-8-sig")
+            except (configparser.Error, UnicodeDecodeError) as e:
+                print(f"Hibás beállításfájl, alapértékek: {path}: {e}", file=sys.stderr)
         for section, defaults in (
                 ('UI', {'theme': DEFAULT_APPEARANCE, 'language': 'hu', 'recursive': 'yes', 'last_folder': '',
                         'move_base': '', 'dup_criteria': ",".join(DEFAULT_DUP_CRITERIA)}),
@@ -2518,12 +2604,11 @@ class ImageRenamerGUI(_BaseTk):
         config_menu.add_command(label=self.t("menu_language"), image=self.icons["folder"],
                                 compound="left", command=self.set_language)
         appearance_menu = tk.Menu(config_menu, tearoff=0)
-        for name in APPEARANCES:
-            available = sv_ttk is not None or name not in SV_APPEARANCES
-            label = self.t("appearance_" + name) + ("" if available else self.t("appearance_needs_sv"))
-            appearance_menu.add_radiobutton(label=label, value=name, variable=self.appearance_var,
-                                            command=self._on_appearance_select,
-                                            state=tk.NORMAL if available else tk.DISABLED)
+        for index, group in enumerate(APPEARANCE_GROUPS):
+            if index:
+                appearance_menu.add_separator()
+            for name in group:
+                self._add_appearance_item(appearance_menu, name)
         config_menu.add_cascade(label=self.t("menu_appearance"), menu=appearance_menu)
         config_menu.add_separator()
         self.place_var = tk.BooleanVar(value=self.settings.place_enabled)
@@ -2574,6 +2659,16 @@ class ImageRenamerGUI(_BaseTk):
             self.settings.config['UI']['language'] = lang.strip().lower()
             self.settings.save_settings()
             messagebox.showinfo(self.t("info"), self.t("restart"))
+
+    def _add_appearance_item(self, menu, name):
+        """Egy megjelenés a menüben; ha a csomag vagy a themes mappa hiányzik, szürkén, okkal."""
+        available = appearance_available(name, sv_ttk is not None)
+        label = self.t("appearance_" + name)
+        if not available:
+            label += self.t("appearance_needs_sv" if name in SV_APPEARANCES else "appearance_missing")
+        menu.add_radiobutton(label=label, value=name, variable=self.appearance_var,
+                             command=self._on_appearance_select,
+                             state=tk.NORMAL if available else tk.DISABLED)
 
     def _on_appearance_select(self):
         self.apply_appearance(self.appearance_var.get())
@@ -2675,11 +2770,13 @@ class ImageRenamerGUI(_BaseTk):
     def apply_appearance(self, name):
         """Megjelenés váltása futás közben, újraindítás nélkül."""
         name = normalize_appearance(name, sv_ttk is not None)
+        if name in TCL_THEMES and not self._use_tcl_theme(name):
+            name = DEFAULT_APPEARANCE
         if name in SV_APPEARANCES:
             sv_ttk.set_theme("dark" if name.endswith("dark") else "light", root=self)
         elif name == "system":
             self.style.theme_use(self._native_ttk_theme)
-        else:
+        elif name not in TCL_THEMES:
             self._style_flat_ttk(PALETTES[name])
         # Az sv-ttk a <<ThemeChanged>> eseményre maga is átszínez: fusson le előbb,
         # hogy a lenti beállítások legyenek a végsők
@@ -2717,6 +2814,43 @@ class ImageRenamerGUI(_BaseTk):
         self._style_feature_buttons()
         self.refresh_guide()
 
+    def _use_tcl_theme(self, name):
+        """Az Azure/Forest téma betöltése (csak először) és bekapcsolása; hiba esetén False."""
+        path, theme = TCL_THEMES[name]
+        try:
+            if theme not in self.style.theme_names():
+                self._source_tcl(resource_path(path).replace("\\", "/"))
+            self.style.theme_use(theme)
+        except tk.TclError as e:
+            print(f"A(z) {name} megjelenés nem tölthető be: {e}", file=sys.stderr)
+            return False
+        # Az Azure a közös színeket nem a témában, hanem az azure.tcl set_theme eljárásában adja meg
+        # (ami a betűtípust is átírná), ezért itt állítjuk be ugyanazokat; a Forestnél ez ugyanaz.
+        c = PALETTES[name]
+        self.style.configure(".", background=c["bg"], foreground=c["fg"], troughcolor=c["bg"],
+                             focuscolor=c["select_bg"], selectbackground=c["select_bg"],
+                             selectforeground=c["select_fg"], insertcolor=c["fg"], insertwidth=1,
+                             fieldbackground=c["select_bg"], borderwidth=1, relief="flat")
+        self.style.map(".", foreground=[("disabled", c["disabled"])])
+        return True
+
+    def _source_tcl(self, path):
+        """Tcl fájl betöltése. Windowson elkapott kimenet mellett (pl. pytest) a Tcl "source" néha
+        "couldn't read file ...: No error" hibát ad; ilyenkor Pythonból olvassuk be, és az
+        [info script] beállításával futtatjuk, hogy a téma megtalálja a képeit."""
+        try:
+            self.tk.call("source", path)
+            return
+        except tk.TclError:
+            with open(path, encoding="utf-8") as f:
+                code = f.read()
+        previous = self.tk.call("info", "script")
+        self.tk.call("info", "script", path)
+        try:
+            self.tk.eval(code)
+        finally:
+            self.tk.call("info", "script", previous)
+
     @staticmethod
     def _walk(widget):
         yield widget
@@ -2749,7 +2883,7 @@ class ImageRenamerGUI(_BaseTk):
 
     @property
     def is_dark(self):
-        return self.appearance.endswith("dark")
+        return appearance_is_dark(self.appearance)
 
     def _on_toplevel_map(self, event):
         if isinstance(event.widget, tk.Toplevel):

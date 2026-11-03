@@ -161,6 +161,14 @@ def test_settings_roundtrip(tmp_path):
     assert m.SettingsManager(ini).appearance == "flat-dark"
 
 
+def test_settings_with_bom_or_garbage(tmp_path):
+    ini = tmp_path / "settings.ini"
+    ini.write_bytes("\ufeff[UI]\ntheme = nord\n".encode("utf-8"))
+    assert m.SettingsManager(str(ini)).appearance == "nord"
+    ini.write_text("ez nem ini fájl", encoding="utf-8")
+    assert m.SettingsManager(str(ini)).appearance == "system"
+
+
 @pytest.mark.parametrize("value, sv, expected", [
     ("light", True, "system"),
     ("Sun-Valley-Dark", True, "sun-valley-dark"),
