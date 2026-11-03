@@ -28,6 +28,8 @@ jobs:
           foreach ($f in Get-ChildItem -Path *.png, places.tsv.gz -Name -ErrorAction SilentlyContinue) {
             $data += @("--add-data", "$f;.")
           }
+          # Az Azure és Forest témák (themes\azure, themes\forest) a mappaszerkezettel együtt
+          if (Test-Path themes) { $data += @("--add-data", "themes;themes") }
           pyinstaller --noconfirm --noconsole --onefile --name MediaRenamerPro `
             @data --collect-data sv_ttk --collect-all tkinterdnd2 --collect-all pillow_heif --collect-all rawpy `
             --hidden-import PIL._tkinter_finder Keprename5video.py

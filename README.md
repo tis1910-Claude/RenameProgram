@@ -79,6 +79,9 @@ Példa: `IMG_1234.jpg` → `2024-05-01_14-30-00_Balaton.jpg`
   - **Rendszer**: a gép saját kinézete, mint eddig (alapértelmezett)
   - **Világos** és **Sötét**: lapos, modern színek, külső csomag nélkül
   - **Sun Valley világos / sötét**: Windows 11 stílus, ehhez kell az `sv-ttk` csomag
+  - **Azure világos / sötét** (Fluent stílus, kék) és **Forest világos / sötét** (zöld, Excel-szerű):
+    rajzolt, lekerekített gombok és mezők; a `themes/` mappában a programmal együtt jönnek, nem kell telepíteni
+  - Színsémák külső csomag nélkül: **Nord**, **Dracula**, **Solarized világos / sötét**, **Éjkék**, **Menta**
 
   Windowson a sötét megjelenéseknél a címsor is sötét lesz.
 
@@ -126,9 +129,9 @@ Kézzel:
 
 ```
 pip install pyinstaller
-pyinstaller --noconsole --onefile --add-data "*.png;." --add-data "places.tsv.gz;." --collect-data sv_ttk --collect-all tkinterdnd2 --collect-all pillow_heif --collect-all rawpy --hidden-import PIL._tkinter_finder Keprename5video.py
+pyinstaller --noconsole --onefile --add-data "*.png;." --add-data "places.tsv.gz;." --add-data "themes;themes" --collect-data sv_ttk --collect-all tkinterdnd2 --collect-all pillow_heif --collect-all rawpy --hidden-import PIL._tkinter_finder Keprename5video.py
 ```
-A `--collect-data sv_ttk` a Sun Valley megjelenés fájljait, a `--collect-all tkinterdnd2` a fogd és vidd
+A `--add-data "themes;themes"` az Azure és Forest témákat, a `--collect-data sv_ttk` a Sun Valley megjelenés fájljait, a `--collect-all tkinterdnd2` a fogd és vidd
 programkönyvtárát csomagolja be. Amelyik csomag nincs telepítve, annak a kapcsolóját hagyd el.
 (Linuxon/macOS-en az `--add-data` elválasztója `:` a `;` helyett.)
 
@@ -137,3 +140,9 @@ programkönyvtárát csomagolja be. Amelyik csomag nincs telepítve, annak a kap
 A `places.tsv.gz` (kb. 2 MB, 155 000 település) a [GeoNames](https://www.geonames.org) legalább 1000 lakosú
 településeinek listájából készült (név, koordináta, országkód), a [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
 licenc szerint. Ha hiányzik, a program működik, csak a helyszín funkció nem érhető el.
+
+A `themes/azure` és `themes/forest` mappa rdbende [Azure](https://github.com/rdbende/Azure-ttk-theme) és
+[Forest](https://github.com/rdbende/Forest-ttk-theme) ttk témája, MIT licenccel (részletek: `themes/README.md`).
+A színsémák a [Nord](https://www.nordtheme.com), a [Dracula](https://draculatheme.com), a
+[Solarized](https://ethanschoonover.com/solarized/) és a [Bootswatch](https://bootswatch.com) (Superhero, Minty)
+nyilvános, MIT licencű színeit használják.
