@@ -74,3 +74,25 @@ def test_appearance_menu_has_separators(app):
     types = [found.type(k) for k in range(found.index("end") + 1)]
     assert types.count("separator") == len(m.APPEARANCE_GROUPS) - 1
     assert types.count("radiobutton") == len(m.APPEARANCES)
+
+
+def test_source_tcl_fallback_when_tcl_source_fails(app, monkeypatch, tmp_path):
+    """Ha a Tcl "source" hibát ad, Pythonból olvassa be, és az [info script] a fájlra mutat."""
+    import tkinter as tk
+    script = tmp_path / "proba.tcl"
+    script.write_text("set ::proba_dir [file dirname [info script]]\n", encoding="utf-8")
+    real = app.tk
+
+    class Proxy:
+        def call(self, *args):
+            if args and args[0] == "source":
+                raise tk.TclError("couldn't read file: No error")
+            return real.call(*args)
+
+        def eval(self, code):
+            return real.eval(code)
+
+    monkeypatch.setattr(app, "tk", Proxy())
+    app._source_tcl(str(script).replace("\\", "/"))
+    monkeypatch.setattr(app, "tk", real)
+    assert os.path.normcase(real.eval("set ::proba_dir")) == os.path.normcase(str(tmp_path).replace("\\", "/"))

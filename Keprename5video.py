@@ -2133,7 +2133,12 @@ class SettingsManager:
     def load_settings(self):
         # Régi verzió az aktuális mappába írta a settings.ini-t: azt is beolvassuk
         legacy = os.path.abspath('settings.ini')
-        self.config.read([legacy, self.config_file], encoding="utf-8")
+        # utf-8-sig: a Jegyzettömb BOM-mal menti; egy sérült fájl miatt se álljon le a program
+        for path in (legacy, self.config_file):
+            try:
+                self.config.read(path, encoding="utf-8-sig")
+            except (configparser.Error, UnicodeDecodeError) as e:
+                print(f"Hibás beállításfájl, alapértékek: {path}: {e}", file=sys.stderr)
         for section, defaults in (
                 ('UI', {'theme': DEFAULT_APPEARANCE, 'language': 'hu', 'recursive': 'yes', 'last_folder': '',
                         'move_base': '', 'dup_criteria': ",".join(DEFAULT_DUP_CRITERIA)}),
@@ -2814,7 +2819,7 @@ class ImageRenamerGUI(_BaseTk):
         path, theme = TCL_THEMES[name]
         try:
             if theme not in self.style.theme_names():
-                self.tk.call("source", resource_path(path).replace("\\", "/"))
+                self._source_tcl(resource_path(path).replace("\\", "/"))
             self.style.theme_use(theme)
         except tk.TclError as e:
             print(f"A(z) {name} megjelenés nem tölthető be: {e}", file=sys.stderr)
@@ -2828,6 +2833,23 @@ class ImageRenamerGUI(_BaseTk):
                              fieldbackground=c["select_bg"], borderwidth=1, relief="flat")
         self.style.map(".", foreground=[("disabled", c["disabled"])])
         return True
+
+    def _source_tcl(self, path):
+        """Tcl fájl betöltése. Windowson elkapott kimenet mellett (pl. pytest) a Tcl "source" néha
+        "couldn't read file ...: No error" hibát ad; ilyenkor Pythonból olvassuk be, és az
+        [info script] beállításával futtatjuk, hogy a téma megtalálja a képeit."""
+        try:
+            self.tk.call("source", path)
+            return
+        except tk.TclError:
+            with open(path, encoding="utf-8") as f:
+                code = f.read()
+        previous = self.tk.call("info", "script")
+        self.tk.call("info", "script", path)
+        try:
+            self.tk.eval(code)
+        finally:
+            self.tk.call("info", "script", previous)
 
     @staticmethod
     def _walk(widget):
